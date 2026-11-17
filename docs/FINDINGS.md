@@ -25,16 +25,11 @@ Sources: Dungeon-Rampage-Haxe (`src`, `Resources/Levels`), DRH-Mod-API tag `v1.4
 - Only layer 5 is cleared on a floor build (`DungeonFloorFactory`), so layer 70 is kept.
 - The UI toggle (`ui1_9visible`) hides layers 52–59 only, not layer 70.
 - `StarlingWorldCut` masks the whole world group the same way it masks the floor, so rings are clipped with the floor.
-- Earlier, a ring drawn on `context.overlay` sat above the popups (the screenshot `image-5.png` case). Moving it into layer 70 fixes the order in the code; not yet seen in the game.
+- A shape added to layer 70 is drawn above the heroes and monsters on the floor because the game draws world actors with Starling underneath.
 
-## Timing
+## Timing and Floor reference
 
 - `Host.ready` runs after the scene graph is created (`architectureLoaded` follows the facade constructor), so `ready` can rely on the scene graph.
-- The floor's data (`floor.floor`, its `dungeonFloorFactory`, the tile library JSON) can come a few frames after `floorEnter`. The mod waits for it, up to 600 frames (`FloorState.MAX_WAIT_FRAMES`), then gives up for that floor and logs it.
+- The floor's data (its `dungeonFloorFactory`, the tile library JSON) can come a few frames after `floorEnter`. The mod waits for it, up to 600 frames (`FloorState.MAX_WAIT_FRAMES`), then gives up for that floor and logs it.
+- The game's `DistributedDungeonFloor` is retrieved without accessing private API internals by calling `ctx.core.facade.gameObjectManager.getReferenceFromId(floor.id)`.
 - The tile library JSON is cached by identity (`getTileLibraryJson` returns the cached map entry), so the analysis runs once per library.
-
-## Open items
-
-- The exact object in the earlier `image-6.png` ring was not identified from the screenshot. Under the current rule, no drawn zone sits in a small tile with BRUISER or FODDER. That ring most likely came from an earlier build that drew every zone.
-- Game-internal members (`dungeonFloorFactory`, `mTileLibraryJson`, `SceneGraphManager.addChild`) are not checked by Astra; they were checked against the DRH source.
-- Nothing has been run in the game.

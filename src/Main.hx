@@ -6,7 +6,6 @@ import mods.api.Context;
 import mods.api.Mod;
 import mods.api.Subscription;
 import mods.api.dungeon.Floor;
-import mods.api.settings.Flag;
 import mods.proximity_circle.ui.Circles;
 import openfl.events.Event;
 
@@ -23,8 +22,9 @@ typedef Analysis = {
  * get no ring.
  *
  * The rings sit on the game's world layer 70, so the camera moves them with the floor and every popup,
- * menu and the HUD draws above them. They are built once per floor; while a floor is shown, nothing
- * runs per frame.
+ * menu and the HUD draws above them. Because the game draws world characters with Starling underneath,
+ * the rings are drawn above heroes and monsters. They are built once per floor; while a floor is shown,
+ * nothing runs per frame.
  *
  * All the mod's state is in three places: `state` (which floor, and whether it is built), `rings`
  * (the one shape) and `analysed` (the last tile library read, reused by floors of the same library).
@@ -32,16 +32,20 @@ typedef Analysis = {
 class Main extends Mod {
 	/**
 	 * The world's layer 70 (`GroundLayer2`): inside the world, so the camera moves it, and below every
-	 * popup, menu and the HUD. Not layer 5: a floor's build clears layer 5, which would take the rings
-	 * with it. Layer 70 is never cleared, nor hidden by the game's UI toggle.
+	 * popup, menu and the HUD. Drawn above heroes and monsters because Starling draws underneath.
+	 * Not layer 5: a floor's build clears layer 5, which would take the rings with it. Layer 70 is
+	 * never cleared, nor hidden by the game's UI toggle.
 	 */
 	static inline final RING_LAYER = 70;
+
+	/** R key (82), rebindable under CONTROLS in the settings menu. */
+	static inline final TOGGLE_KEY:UInt = 82;
 
 	var ctx:Context;
 
 	var rings:Circles;
 
-	var showRings:Flag;
+	var visible:Bool = true;
 
 	var state:FloorState<Floor>;
 
@@ -59,10 +63,10 @@ class Main extends Mod {
 		state = new FloorState<Floor>();
 		rings = new Circles();
 		frameListener = frame;
-		showRings = ctx.settings.flag("showRings", "Show rings", "Draws a ring around each proximity trigger on the floor.", true);
-		subscriptions.push(showRings.onChange(function(on:Bool) {
-			rings.setVisible(on);
-		}));
+		ctx.keys.action("toggle", "Show or hide", "Shows or hides the proximity trigger rings on the floor.", TOGGLE_KEY).onPress(function() {
+			visible = !visible;
+			rings.setVisible(visible);
+		});
 		subscriptions.push(ctx.onFloorEnter(enterFloor));
 		subscriptions.push(ctx.onFloorExit(function(_:Floor) leaveFloor()));
 		subscriptions.push(ctx.onTownEnter(leaveFloor));
@@ -125,7 +129,11 @@ class Main extends Mod {
 	 * there yet.
 	 */
 	function build(floor:Floor):Bool {
-		var game:Null<DistributedDungeonFloor> = @:privateAccess floor.floor;
+		var facade = ctx.core.facade;
+		var gom = facade == null ? null : facade.gameObjectManager;
+		if (gom == null)
+			return false;
+		var game:Null<DistributedDungeonFloor> = cast gom.getReferenceFromId(floor.id);
 		var layers = sceneGraph();
 		if (game == null || game.isDestroyed || layers == null)
 			return false;
@@ -145,7 +153,7 @@ class Main extends Mod {
 		var tiles:Array<Ring.TileInfo> = [for (tile in floor.tiles) {id: tile.id, x: tile.x, y: tile.y}];
 		var zones = Ring.zonesOf(tiles, cache.objectsByTile, cache.drawable);
 		rings.build(zones);
-		rings.setVisible(showRings.value);
+		rings.setVisible(visible);
 		layers.addChild(rings.shape, RING_LAYER);
 		ctx.log("Proximity Circle: " + zones.length + " ring(s) on " + floor.map);
 		return true;
