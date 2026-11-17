@@ -1,7 +1,7 @@
 # Proximity Circle
 
 <!-- drh:show -->
-Draws a dashed ring around each proximity trigger on the dungeon floor, so you can see where they are.
+Draws a dashed Okabe-Ito blue ring with a dark contrast halo around each proximity trigger on the dungeon floor, so you can see where they are.
 
 - Triggers that do nothing get no ring.
 - Triggers that set off an exploding barrel (any trigger that feeds an `NPC_SUICIDE_TRIGGER`) get no ring.
@@ -12,7 +12,3 @@ Draws a dashed ring around each proximity trigger on the dungeon floor, so you c
 
 - Press **R** to show or hide the rings (rebindable under **CONTROLS** in the settings menu).
 <!-- /drh:show -->
-
-## Technical details
-
-See `docs/FINDINGS.md` for the level data analysis and layer placement details.

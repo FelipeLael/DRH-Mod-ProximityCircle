@@ -1,8 +1,8 @@
 {
   "id": "proximity_circle",
   "name": "Proximity Circle",
-  "description": "Draws dashed rings around proximity triggers on the dungeon floor, with a key to toggle them.",
-  "version": "0.3.1",
+  "description": "Draws dashed blue rings with a contrast halo around proximity triggers, with a key to toggle them.",
+  "version": "0.3.2",
   "author": "Astra",
   "api": "1.4",
   "drh": "18",
