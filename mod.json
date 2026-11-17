@@ -1,0 +1,11 @@
+{
+  "id": "proximity_circle",
+  "name": "Proximity Circle",
+  "description": "Draws a dashed ring around each proximity trigger on the dungeon floor, so you can see where they are. Triggers that do nothing, or that set off an exploding barrel, get no ring.",
+  "version": "0.3.0",
+  "author": "Astra",
+  "api": "1.4",
+  "drh": "18",
+  "entry": "Main",
+  "uses": ["extends"]
+}
