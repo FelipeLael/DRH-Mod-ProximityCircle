@@ -7,23 +7,24 @@ typedef Zone = {
 	var radius:Float;
 }
 
-/** A destructible prop trap in world units: its centre on the floor. */
+/** A tile as the mod reads it from the floor: its id in the tile library and its top-left corner. */
+typedef TileInfo = {
+	var id:String;
+	var x:Int;
+	var y:Int;
+}
+
+/** A destructible prop trap in world units: its centre and GM constant. */
 typedef PropTrap = {
 	var x:Float;
 	var y:Float;
+	var constant:String;
 }
 
 /** Drawable proximity zones and destructible prop traps found in one library pass. */
 typedef DrawableSet = {
 	var zones:Map<String, Bool>;
 	var propTraps:Map<String, Bool>;
-}
-
-/** A tile as the mod reads it from the floor: its id in the tile library and its top-left corner. */
-typedef TileInfo = {
-	var id:String;
-	var x:Int;
-	var y:Int;
 }
 
 /**
@@ -53,19 +54,19 @@ typedef Dash = {
 }
 
 /**
- * The zones' rule, colour selection and arithmetic, free of the game.
+ * The zones' and prop-traps' rule, colour selection and arithmetic, free of the game.
  *
- * In the game's data a zone is a `LETrigger` object with `PROXIMITY_TRIGGER` or `PROXIMITY_ALL_HERO`,
- * inside a tile of the library. Its centre is the tile's top-left corner plus `(x ?? 0, y ?? 0)`, and
- * its radius is `radius`.
+ * Proximity zones are `LETrigger` objects with `PROXIMITY_TRIGGER` or `PROXIMITY_ALL_HERO`
+ * that reach at least one gameplay-acting object (traps, gates/walls, switches, generators...).
  *
- * A zone gets a ring only if it reaches at least one gameplay-acting object (traps, gates/walls,
- * switches, monster generators...) through logic gates, timers and chained zones. Purely cosmetic
- * sinks (camera shakes, sound cues, floor text) and `NPC_SUICIDE_TRIGGER` (bare exploding-barrel
- * fuses) do not count as acting, without vetoing zones that also drive real traps or ambushes.
+ * Destructible prop traps are non-secret `LENPC` (`PROP`) objects watched by `NPC_DAMAGE_TRIGGER`
+ * or an inverted (`NOT_GATE`) `NPC_LIFE_TRIGGER` that drives a gameplay-acting object when
+ * damaged or destroyed.
  */
 class Ring {
 	public static inline final TYPE = "LETrigger";
+
+	public static inline final NPC_TYPE = "LENPC";
 
 	public static inline final CONSTANT = "PROXIMITY_TRIGGER";
 
@@ -73,16 +74,20 @@ class Ring {
 
 	public static inline final LIFE_TRIGGER = "NPC_LIFE_TRIGGER";
 
+	public static inline final DAMAGE_TRIGGER = "NPC_DAMAGE_TRIGGER";
+
 	public static inline final SUICIDE = "NPC_SUICIDE_TRIGGER";
 
 	/** Objects that only pass a signal on: gates, timers and chained proximity zones. */
 	static inline final GATE_TYPE = "LETriggerGate";
 
+	static inline final NOT_GATE = "NOT_GATE";
+
 	static inline final AUTO_TIMER = "AUTO_TIMER_TRIGGER";
 
 	static inline final ASYM_AUTO_TIMER = "ASYM_AUTO_TIMER_TRIGGER";
 
-	/** Non-gameplay feedback sinks that should not by themselves produce a hazard ring. */
+	/** Non-gameplay feedback sinks that should not by themselves produce a hazard marker. */
 	static inline final CAMERA_TRIGGERABLE_TYPE = "LETriggerableCamera";
 
 	static inline final FLOOR_MESSAGE = "FLOOR_MESSAGE_TRIGGERABLE";
@@ -100,11 +105,8 @@ class Ring {
 	/** Flame tangerine-red (#FF781F): high-luminance hazard core for dark, cool and neutral stone maps. */
 	public static inline final COLOR_FLAME:UInt = 0xFF781F;
 
-	/** Cerise-crimson (#FF476C): blue-lifted hazard core for saturated green grass and bright warm sand. */
+	/** Cerise-crimson (#FF476C): blue-lifted hazard core for saturated green jungle and bright warm sand. */
 	public static inline final COLOR_CRIMSON:UInt = 0xFF476C;
-
-	/** High-luminance amber-gold (#FFD028) for destructible-prop trap markers (distinct from ring hues). */
-	public static inline final COLOR_PROP_TRAP:UInt = 0xFFD028;
 
 	/** True when `object` is a hero proximity trigger zone (`PROXIMITY_TRIGGER` or `PROXIMITY_ALL_HERO`). */
 	public static function isZone(object:LibraryObject):Bool {
@@ -113,18 +115,17 @@ class Ring {
 			&& (object.constant == CONSTANT || object.constant == CONSTANT_ALL_HERO);
 	}
 
-	/** True when `object` is an `NPC_LIFE_TRIGGER` watching a destructible NPC/prop. */
-	public static function isLifeTrigger(object:LibraryObject):Bool {
+	/** True when `object` watches a destructible NPC/prop (`NPC_LIFE_TRIGGER` or `NPC_DAMAGE_TRIGGER`). */
+	public static function isWatchTrigger(object:LibraryObject):Bool {
 		return object != null
 			&& object.type == TYPE
-			&& object.constant == LIFE_TRIGGER
+			&& (object.constant == LIFE_TRIGGER || object.constant == DAMAGE_TRIGGER)
 			&& object.npcId != null;
 	}
 
 	/**
-	 * Biome-adaptive 2-hue hazard palette (Option A): selects cerise-crimson on saturated green jungle
-	 * and bright warm arena sand (avoiding Protan/Deutan red-green and warm-sand collisions), and flame
-	 * tangerine-red across dark, icy and stone biomes.
+	 * Biome-adaptive 2-hue hazard palette: selects cerise-crimson on saturated green jungle and
+	 * bright warm arena sand, and flame tangerine-red across dark, icy and stone biomes.
 	 */
 	public static function colorForFloor(theme:Null<String>, map:Null<String>):UInt {
 		var key = theme != null && theme != "" ? theme.toUpperCase() : (map == null ? "" : map.toUpperCase());
@@ -134,24 +135,24 @@ class Ring {
 	}
 
 	/**
-	 * Finds both drawable proximity zones and destructible-prop traps (`NPC_LIFE_TRIGGER` watching
-	 * a non-secret prop) in one backward pass from gameplay-acting objects over the library's wires.
+	 * Finds both drawable proximity zones and destructible-prop traps (`NPC_DAMAGE_TRIGGER` or
+	 * inverted `NPC_LIFE_TRIGGER` watching a non-secret prop) in one parity-aware backward pass.
 	 */
 	public static function drawableSet(objects:Array<LibraryObject>, links:Array<Link>, isProp:String->Bool):DrawableSet {
 		var known = new Map<String, LibraryObject>();
 		var acting:Array<String> = [];
 		var zones:Array<String> = [];
-		var lifeTriggers:Array<LibraryObject> = [];
+		var watches:Array<LibraryObject> = [];
 		for (object in objects) {
 			if (object == null || object.id == null)
 				continue;
 			known.set(object.id, object);
-			if (!isPassing(object) && !isIgnoredSink(object))
+			if (object.type != TYPE && !isPassing(object) && !isIgnoredSink(object))
 				acting.push(object.id);
 			if (isZone(object))
 				zones.push(object.id);
-			else if (isLifeTrigger(object))
-				lifeTriggers.push(object);
+			else if (isWatchTrigger(object))
+				watches.push(object);
 		}
 
 		// Who drives whom, counting only wires whose two ends are objects of the library.
@@ -164,18 +165,20 @@ class Ring {
 			driversOf.get(link.triggerableId).push(link.triggerId);
 		}
 
-		var doesSomething = reach(acting, driversOf);
+		var reachResult = reachParity(acting, driversOf, known);
 		var zoneOut = new Map<String, Bool>();
 		for (id in zones)
-			if (doesSomething.exists(id))
+			if (reachResult.p0.exists(id) || reachResult.p1.exists(id))
 				zoneOut.set(id, true);
 
 		var propOut = new Map<String, Bool>();
-		for (trig in lifeTriggers) {
-			if (!doesSomething.exists(trig.id))
+		for (trig in watches) {
+			// NPC_LIFE_TRIGGER outputs 0 on destruction (needs p0 at output); NPC_DAMAGE_TRIGGER outputs 1 (needs p1).
+			var activeOnTrigger = trig.constant == LIFE_TRIGGER ? reachResult.p0.exists(trig.id) : reachResult.p1.exists(trig.id);
+			if (!activeOnTrigger)
 				continue;
 			var npc = known.get(trig.npcId);
-			if (npc == null || npc.id == null || npc.constant == null)
+			if (npc == null || npc.id == null || npc.type != NPC_TYPE || npc.constant == null)
 				continue;
 			if (npc.constant.indexOf("WALL_SECRET") >= 0)
 				continue;
@@ -189,24 +192,6 @@ class Ring {
 	/** Backwards-compatible helper returning only drawable proximity zone ids. */
 	public static function drawable(objects:Array<LibraryObject>, links:Array<Link>):Map<String, Bool> {
 		return drawableSet(objects, links, function(_) return false).zones;
-	}
-
-	/** The destructible prop traps of the floor's tiles that are in `drawableProps`. */
-	public static function propTrapsOf(tiles:Array<TileInfo>, objectsByTile:Map<String, Array<LibraryObject>>, drawableProps:Map<String, Bool>):Array<PropTrap> {
-		var out:Array<PropTrap> = [];
-		for (tile in tiles) {
-			if (tile == null || tile.id == null || !objectsByTile.exists(tile.id))
-				continue;
-			for (object in objectsByTile.get(tile.id)) {
-				if (object == null || object.id == null || !drawableProps.exists(object.id))
-					continue;
-				out.push({
-					x: tile.x + coord(object.x),
-					y: tile.y + coord(object.y)
-				});
-			}
-		}
-		return out;
 	}
 
 	/** The zones of the floor's tiles that are in `drawable`. `objectsByTile` gives a tile's objects by the tile's id. */
@@ -225,6 +210,25 @@ class Ring {
 					x: tile.x + coord(object.x),
 					y: tile.y + coord(object.y),
 					radius: r
+				});
+			}
+		}
+		return out;
+	}
+
+	/** The destructible prop traps of the floor's tiles that are in `drawableProps`. */
+	public static function propTrapsOf(tiles:Array<TileInfo>, objectsByTile:Map<String, Array<LibraryObject>>, drawableProps:Map<String, Bool>):Array<PropTrap> {
+		var out:Array<PropTrap> = [];
+		for (tile in tiles) {
+			if (tile == null || tile.id == null || !objectsByTile.exists(tile.id))
+				continue;
+			for (object in objectsByTile.get(tile.id)) {
+				if (object == null || object.id == null || object.constant == null || !drawableProps.exists(object.id))
+					continue;
+				out.push({
+					x: tile.x + coord(object.x),
+					y: tile.y + coord(object.y),
+					constant: object.constant
 				});
 			}
 		}
@@ -264,27 +268,39 @@ class Ring {
 			|| object.constant == PLAY_SOUND;
 	}
 
-	/** Every object that reaches one of the seeds by following wires backward, the seeds included. */
-	static function reach(seeds:Array<String>, driversOf:Map<String, Array<String>>):Map<String, Bool> {
-		var found = new Map<String, Bool>();
-		var queue:Array<String> = [];
+	/**
+	 * Walks wires backward from acting sinks while tracking `NOT_GATE` parity.
+	 * `p1` holds nodes whose `1` output reaches a sink as active (`1`), `p0` holds nodes whose `0` output does.
+	 */
+	static function reachParity(seeds:Array<String>, driversOf:Map<String, Array<String>>,
+			known:Map<String, LibraryObject>):{p0:Map<String, Bool>, p1:Map<String, Bool>} {
+		var p0 = new Map<String, Bool>();
+		var p1 = new Map<String, Bool>();
+		var qIds:Array<String> = [];
+		var qParities:Array<Int> = [];
 		for (id in seeds) {
-			if (!found.exists(id)) {
-				found.set(id, true);
-				queue.push(id);
+			if (!p1.exists(id)) {
+				p1.set(id, true);
+				qIds.push(id);
+				qParities.push(1);
 			}
 		}
-		while (queue.length > 0) {
-			var id = queue.pop();
+		while (qIds.length > 0) {
+			var id = qIds.pop();
+			var parity = qParities.pop();
 			if (!driversOf.exists(id))
 				continue;
+			var node = known.get(id);
+			var nextParity = (node != null && node.constant == NOT_GATE) ? (1 - parity) : parity;
+			var target = nextParity == 0 ? p0 : p1;
 			for (driver in driversOf.get(id)) {
-				if (!found.exists(driver)) {
-					found.set(driver, true);
-					queue.push(driver);
+				if (!target.exists(driver)) {
+					target.set(driver, true);
+					qIds.push(driver);
+					qParities.push(nextParity);
 				}
 			}
 		}
-		return found;
+		return {p0: p0, p1: p1};
 	}
 }

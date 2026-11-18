@@ -1,8 +1,8 @@
 {
   "id": "proximity_circle",
   "name": "Proximity Circle",
-  "description": "Marks floor proximity traps and breakable objects that spawn enemies or traps. Press R to toggle.",
-  "version": "0.5.3",
+  "description": "Marks floor proximity traps and makes breakable trap objects glow and shimmer. Press R to toggle.",
+  "version": "0.5.4",
   "author": "Astra",
   "api": "1.4",
   "drh": "18",

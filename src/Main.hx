@@ -4,12 +4,15 @@ import brain.gameObject.GameObject;
 import brain.sceneGraph.SceneGraphManager;
 import brain.starling.StarlingLayer;
 import distributedObjects.DistributedDungeonFloor;
+import distributedObjects.NPCGameObject;
 import modding.ModSubscription;
 import mods.api.Context;
 import mods.api.Mod;
 import mods.api.Subscription;
 import mods.api.dungeon.Floor;
 import mods.proximity_circle.ui.Circles;
+import mods.proximity_circle.ui.PropHighlight;
+import openfl.Lib;
 import openfl.events.Event;
 
 /** A tile library read once: its theme, its objects by tile, and the zones/prop traps to mark. */
@@ -22,14 +25,9 @@ typedef Analysis = {
 }
 
 /**
- * Draws a cased dashed warning ring around each gameplay-acting proximity trigger on the dungeon floor,
- * using a biome-adaptive 2-hue hazard palette (`#FF781F` flame / `#FF476C` cerise-crimson) over an
- * `#08080E` obsidian contrast casing.
- *
- * Rings render on a dedicated world `StarlingLayer` (`sortIndex = 12`), placing them directly on the
- * dungeon floor above ground tiles and floor rugs (`5`/`10`) and beneath heroes, monsters, walls (`20`),
- * room fades (`46`) and the Starling HUD (`64`), with zero `nativeOverlay` hit-test or click-blocking cost.
- * When a secret room opens mid-floor (`DistributedDungeonFloor.tiles`), the rings rebuild once.
+ * Marks both floor proximity traps (cased dashed rings on Starling floor layer 12) and destructible
+ * trap objects (`NPC_LIFE_TRIGGER` / `NPC_DAMAGE_TRIGGER` props highlighted directly with a glowing
+ * violet-magenta rim + shimmering sheen so players avoid destroying them).
  */
 class Main extends Mod {
 	/** Starling world layer index: above ground (5) and floor decals (10), below sorted actors/walls (20). */
@@ -47,6 +45,8 @@ class Main extends Mod {
 
 	var rings:Circles;
 
+	var highlights:PropHighlight;
+
 	var visible:Bool = true;
 
 	var state:FloorState<Floor>;
@@ -57,7 +57,7 @@ class Main extends Mod {
 	/** Every API subscription the mod made, cancelled in `dispose`. */
 	var subscriptions:Array<Subscription> = [];
 
-	/** Core host subscriptions (`onFieldReceived`), cancelled in `dispose`. */
+	/** Core host subscriptions (`onFieldReceived`, `onObjectReady`, `onObjectGone`), cancelled in `dispose`. */
 	var coreSubscriptions:Array<ModSubscription> = [];
 
 	/** Kept as a value, so the very listener that was added is the one removed. */
@@ -67,15 +67,20 @@ class Main extends Mod {
 		ctx = context;
 		state = new FloorState<Floor>();
 		rings = new Circles();
+		highlights = new PropHighlight();
 		frameListener = frame;
-		subscriptions.push(ctx.keys.action("toggle", "Show or hide", "Shows or hides the proximity trigger rings on the floor.", TOGGLE_KEY).onPress(function() {
+		subscriptions.push(ctx.keys.action("toggle", "Show or hide", "Shows or hides proximity rings and trap object highlights.", TOGGLE_KEY).onPress(function() {
 			visible = !visible;
 			rings.setVisible(visible);
+			highlights.setVisible(visible);
+			syncListener();
 		}));
 		subscriptions.push(ctx.onFloorEnter(enterFloor));
 		subscriptions.push(ctx.onFloorExit(function(_:Floor) leaveFloor()));
 		subscriptions.push(ctx.onTownEnter(enterTown));
 		coreSubscriptions.push(ctx.core.onFieldReceived(onFieldReceived));
+		coreSubscriptions.push(ctx.core.onObjectReady(onObjectReady));
+		coreSubscriptions.push(ctx.core.onObjectGone(onObjectGone));
 	}
 
 	override public function ready(context:Context):Void {
@@ -95,7 +100,7 @@ class Main extends Mod {
 	}
 
 	function enterFloor(floor:Floor):Void {
-		removeRings();
+		removeMarkers();
 		state.enter(floor);
 		syncListener();
 	}
@@ -103,7 +108,7 @@ class Main extends Mod {
 	function leaveFloor():Void {
 		if (state != null)
 			state.leave();
-		removeRings();
+		removeMarkers();
 		syncListener();
 	}
 
@@ -113,7 +118,7 @@ class Main extends Mod {
 		analysed = null;
 	}
 
-	/** Rebuilds rings on the next frame when a secret wall reveals new tiles on the active floor. */
+	/** Rebuilds markers on the next frame when a secret wall reveals new tiles on the active floor. */
 	function onFieldReceived(object:GameObject, _:UInt, name:String):Void {
 		if (name != TILES_FIELD || object == null)
 			return;
@@ -124,8 +129,27 @@ class Main extends Mod {
 		syncListener();
 	}
 
-	/** The rings leave the world and their geometry is freed. Safe at any time. */
-	function removeRings():Void {
+	/** Highlights trap props that spawn after initial floor build (or after secret walls open). */
+	function onObjectReady(object:GameObject):Void {
+		if (highlights == null || state == null || state.current == null || object == null)
+			return;
+		var npc = Std.downcast(object, NPCGameObject);
+		if (npc != null && highlights.tryTrack(npc))
+			syncListener();
+	}
+
+	/** Cleans up tracked prop highlight when a trap object leaves the floor. */
+	function onObjectGone(object:GameObject):Void {
+		if (highlights == null || object == null)
+			return;
+		highlights.untrack(object.id);
+		syncListener();
+	}
+
+	/** Removes all floor rings and prop-trap highlights. Safe at any time. */
+	function removeMarkers():Void {
+		if (highlights != null)
+			highlights.clear();
 		if (rings == null)
 			return;
 		rings.clear();
@@ -134,11 +158,12 @@ class Main extends Mod {
 			layers.removeChild(rings.shape);
 	}
 
-	/** The frame listener runs exactly while the state is waiting for a floor's data. */
+	/** The frame listener runs while waiting for floor data or while animating visible trap props. */
 	function syncListener():Void {
-		if (ctx == null || ctx.overlay == null || frameListener == null || state == null)
+		if (ctx == null || ctx.overlay == null || frameListener == null || state == null || highlights == null)
 			return;
-		if (state.listening)
+		var needFrame = state.listening || (visible && highlights.hasActive);
+		if (needFrame)
 			ctx.overlay.addEventListener(Event.ENTER_FRAME, frameListener);
 		else
 			ctx.overlay.removeEventListener(Event.ENTER_FRAME, frameListener);
@@ -153,12 +178,14 @@ class Main extends Mod {
 			case GiveUp(floor):
 				ctx.log("Proximity Circle: the game gave no data for floor " + floor.map + " in time; no rings on it.");
 		}
+		if (visible && highlights != null && highlights.hasActive)
+			highlights.update(Lib.getTimer());
 		syncListener();
 	}
 
 	/**
-	 * Draws the floor's rings into the world. False while the game's data, Starling layer manager,
-	 * or scene graph is not ready yet.
+	 * Draws the floor's rings and highlights its destructible trap objects. False while the game's
+	 * data, Starling layer manager, or scene graph is not ready yet.
 	 */
 	function build(floor:Floor):Bool {
 		var facade = ctx.core.facade;
@@ -193,10 +220,20 @@ class Main extends Mod {
 		var coreColor = Ring.colorForFloor(cache.theme, floor.map);
 
 		layers.removeChild(rings.shape);
-		rings.build(zones, propTraps, coreColor, starlingFloor);
+		rings.build(zones, coreColor, starlingFloor);
 		rings.setVisible(visible);
-		if (starlingFloor == null && (zones.length > 0 || propTraps.length > 0))
+		if (starlingFloor == null && zones.length > 0)
 			layers.addChild(rings.shape, FALLBACK_RING_LAYER);
+
+		highlights.setFloorTraps(propTraps, visible);
+		var actors = game.remoteActors;
+		if (actors != null) {
+			for (key in actors.keysToArray()) {
+				var npc = Std.downcast(actors.itemFor(key), NPCGameObject);
+				if (npc != null)
+					highlights.tryTrack(npc);
+			}
+		}
 
 		ctx.log("Proximity Circle: " + zones.length + " ring(s), " + propTraps.length + " prop trap(s) on " + floor.map);
 		return true;
