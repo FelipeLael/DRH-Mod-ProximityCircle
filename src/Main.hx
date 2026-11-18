@@ -12,12 +12,13 @@ import mods.api.dungeon.Floor;
 import mods.proximity_circle.ui.Circles;
 import openfl.events.Event;
 
-/** A tile library read once: its theme, its objects by tile, and the zones that get a ring. */
+/** A tile library read once: its theme, its objects by tile, and the zones/prop traps to mark. */
 typedef Analysis = {
 	var json:Dynamic;
 	var theme:String;
 	var objectsByTile:Map<String, Array<Ring.LibraryObject>>;
 	var drawable:Map<String, Bool>;
+	var drawableProps:Map<String, Bool>;
 }
 
 /**
@@ -182,26 +183,27 @@ class Main extends Mod {
 
 		var cache = analysed;
 		if (cache == null || cache.json != json) {
-			cache = analyse(json);
+			cache = analyse(json, facade.gameMaster);
 			analysed = cache;
 		}
 
 		var tiles:Array<Ring.TileInfo> = [for (tile in floor.tiles) {id: tile.id, x: tile.x, y: tile.y}];
 		var zones = Ring.zonesOf(tiles, cache.objectsByTile, cache.drawable);
+		var propTraps = Ring.propTrapsOf(tiles, cache.objectsByTile, cache.drawableProps);
 		var coreColor = Ring.colorForFloor(cache.theme, floor.map);
 
 		layers.removeChild(rings.shape);
-		rings.build(zones, coreColor, starlingFloor);
+		rings.build(zones, propTraps, coreColor, starlingFloor);
 		rings.setVisible(visible);
-		if (starlingFloor == null && zones.length > 0)
+		if (starlingFloor == null && (zones.length > 0 || propTraps.length > 0))
 			layers.addChild(rings.shape, FALLBACK_RING_LAYER);
 
-		ctx.log("Proximity Circle: " + zones.length + " ring(s) on " + floor.map);
+		ctx.log("Proximity Circle: " + zones.length + " ring(s), " + propTraps.length + " prop trap(s) on " + floor.map);
 		return true;
 	}
 
-	/** Reads a library once: its theme, its objects by tile, its wires, and the zones that get a ring. */
-	static function analyse(json:Dynamic):Analysis {
+	/** Reads a library once: its theme, its objects by tile, its wires, and the zones/prop traps to mark. */
+	static function analyse(json:Dynamic, gameMaster:Dynamic):Analysis {
 		var objectsByTile = new Map<String, Array<Ring.LibraryObject>>();
 		var all:Array<Ring.LibraryObject> = [];
 		for (tile in (json.LETiles : Array<Dynamic>)) {
@@ -214,11 +216,20 @@ class Main extends Mod {
 		}
 		var links:Array<Ring.Link> = json.LETriggers == null ? [] : (json.LETriggers : Array<Ring.Link>);
 		var theme:String = Std.isOfType(json.theme, String) ? (json.theme : String) : "";
+		var npcByConstant = gameMaster == null ? null : gameMaster.npcByConstant;
+		var isProp = function(constant:String):Bool {
+			if (npcByConstant == null)
+				return false;
+			var npc:Dynamic = npcByConstant.itemFor(constant);
+			return npc != null && npc.CharType == "PROP";
+		};
+		var set = Ring.drawableSet(all, links, isProp);
 		return {
 			json: json,
 			theme: theme,
 			objectsByTile: objectsByTile,
-			drawable: Ring.drawable(all, links)
+			drawable: set.zones,
+			drawableProps: set.propTraps
 		};
 	}
 

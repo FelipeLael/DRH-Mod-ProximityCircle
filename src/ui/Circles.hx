@@ -32,6 +32,15 @@ class Circles {
 	/** Segments per dash's arc: seamless annular quads with shared edges (no gaps, no double-alpha joints). */
 	static inline final STEPS = 4;
 
+	/** Half-diagonal of the diamond hazard frame around a destructible-prop trap (world units). */
+	static inline final PROP_DIAMOND_RADIUS:Float = 26.0;
+
+	/** Half-extent of the inner "do not destroy" X mark inside the diamond. */
+	static inline final PROP_CROSS_RADIUS:Float = 9.0;
+
+	/** Quads emitted per prop trap across halo + core passes: 2 passes * (4 diamond edges + 2 X strokes). */
+	static inline final QUADS_PER_PROP_TRAP = 12;
+
 	/** Max quads fitting within Starling's 65,535-vertex `MeshBatch` limit (`floor(65535 / 4)`). */
 	static inline final MAX_BATCH_QUADS = 16383;
 
@@ -63,10 +72,10 @@ class Circles {
 		}
 	}
 
-	/** Builds every zone's cased dashed ring in world units on `starlingLayer` (preferred) or `shape` (fallback). */
-	public function build(zones:Array<Ring.Zone>, coreColor:UInt, starlingLayer:Null<StarlingLayer>):Void {
+	/** Builds every zone's cased dashed ring and prop-trap diamond+X marker on `starlingLayer` or `shape`. */
+	public function build(zones:Array<Ring.Zone>, propTraps:Array<Ring.PropTrap>, coreColor:UInt, starlingLayer:Null<StarlingLayer>):Void {
 		clear();
-		if (zones.length == 0)
+		if (zones.length == 0 && propTraps.length == 0)
 			return;
 
 		// Cache dash angles by rounded radius so zones of the same size reuse their arc layout.
@@ -78,18 +87,19 @@ class Circles {
 		}
 
 		if (starlingLayer != null) {
-			buildStarling(zones, byRadius, coreColor, starlingLayer);
+			buildStarling(zones, propTraps, byRadius, coreColor, starlingLayer);
 			return;
 		}
 
-		buildOpenFL(zones, byRadius, coreColor);
+		buildOpenFL(zones, propTraps, byRadius, coreColor);
 	}
 
-	function buildStarling(zones:Array<Ring.Zone>, byRadius:Map<Int, Array<Ring.Dash>>, coreColor:UInt, layer:StarlingLayer):Void {
+	function buildStarling(zones:Array<Ring.Zone>, propTraps:Array<Ring.PropTrap>, byRadius:Map<Int, Array<Ring.Dash>>, coreColor:UInt,
+			layer:StarlingLayer):Void {
 		var totalDashes = 0;
 		for (zone in zones)
 			totalDashes += byRadius.get(Math.round(zone.radius)).length;
-		var remainingQuads = totalDashes * 2 * STEPS;
+		var remainingQuads = totalDashes * 2 * STEPS + propTraps.length * QUADS_PER_PROP_TRAP;
 
 		var root = new Sprite();
 		root.touchable = false;
@@ -101,7 +111,7 @@ class Circles {
 		setQuadAlpha(quad, HALO_ALPHA);
 		var capWorld = (HALO_THICKNESS - CORE_THICKNESS) * 0.5;
 
-		// 1. Deep obsidian contrast casing (#08080E) framing radial and angular edges of every dash.
+		// 1. Deep obsidian contrast casing (#08080E) for rings and prop-trap diamond+X markers.
 		for (zone in zones) {
 			var dashes = byRadius.get(Math.round(zone.radius));
 			var slot = 2 * Math.PI / dashes.length;
@@ -116,8 +126,12 @@ class Circles {
 				remainingQuads -= STEPS;
 			}
 		}
+		for (prop in propTraps) {
+			batch = emitPropMarker(root, batch, quad, prop.x, prop.y, HALO_THICKNESS, capWorld, remainingQuads);
+			remainingQuads -= 6;
+		}
 
-		// 2. Biome-adaptive hazard core (#FF781F or #FF476C) with high opacity so casing does not muddy it.
+		// 2. High-opacity cores: biome-adaptive hue for proximity rings, amber-gold (#FFD028) for prop traps.
 		quad.color = coreColor;
 		setQuadAlpha(quad, CORE_ALPHA);
 		for (zone in zones) {
@@ -129,12 +143,60 @@ class Circles {
 				remainingQuads -= STEPS;
 			}
 		}
+		if (propTraps.length > 0) {
+			quad.color = Ring.COLOR_PROP_TRAP;
+			for (prop in propTraps) {
+				batch = emitPropMarker(root, batch, quad, prop.x, prop.y, CORE_THICKNESS, 0.0, remainingQuads);
+				remainingQuads -= 6;
+			}
+		}
 
 		if (batch.numVertices > 0)
 			root.addChild(batch);
 		quad.dispose();
 		layer.addChild(root);
 		starlingRoot = root;
+	}
+
+	static function emitPropMarker(root:Sprite, batch:MeshBatch, quad:Quad, cx:Float, cy:Float, thickness:Float, capExtend:Float,
+			remainingQuads:Int):MeshBatch {
+		var r = PROP_DIAMOND_RADIUS;
+		var x = PROP_CROSS_RADIUS + capExtend * 0.7071;
+		// 4 diamond edges + 2 inner X strokes
+		batch = emitSegment(root, batch, quad, cx, cy - r, cx + r, cy, thickness, capExtend, remainingQuads);
+		batch = emitSegment(root, batch, quad, cx + r, cy, cx, cy + r, thickness, capExtend, remainingQuads - 1);
+		batch = emitSegment(root, batch, quad, cx, cy + r, cx - r, cy, thickness, capExtend, remainingQuads - 2);
+		batch = emitSegment(root, batch, quad, cx - r, cy, cx, cy - r, thickness, capExtend, remainingQuads - 3);
+		batch = emitSegment(root, batch, quad, cx - x, cy - x, cx + x, cy + x, thickness, 0.0, remainingQuads - 4);
+		return emitSegment(root, batch, quad, cx + x, cy - x, cx - x, cy + x, thickness, 0.0, remainingQuads - 5);
+	}
+
+	static function emitSegment(root:Sprite, batch:MeshBatch, quad:Quad, x1:Float, y1:Float, x2:Float, y2:Float, thickness:Float, capExtend:Float,
+			remainingQuads:Int):MeshBatch {
+		var dx = x2 - x1;
+		var dy = y2 - y1;
+		var len = Math.sqrt(dx * dx + dy * dy);
+		if (len <= 0.0001)
+			return batch;
+		var ux = dx / len;
+		var uy = dy / len;
+		var half = thickness * 0.5;
+		var nx = -uy * half;
+		var ny = ux * half;
+		var sx = x1 - ux * capExtend;
+		var sy = y1 - uy * capExtend;
+		var ex = x2 + ux * capExtend;
+		var ey = y2 + uy * capExtend;
+		quad.setVertexPosition(0, sx + nx, sy + ny);
+		quad.setVertexPosition(1, ex + nx, ey + ny);
+		quad.setVertexPosition(2, sx - nx, sy - ny);
+		quad.setVertexPosition(3, ex - nx, ey - ny);
+		if (!batch.canAddMesh(quad, 4)) {
+			root.addChild(batch);
+			batch = newBatch(remainingQuads);
+		}
+		batch.addMesh(quad, null, 1.0, null, true);
+		return batch;
 	}
 
 	static function newBatch(remainingQuads:Int):MeshBatch {
@@ -178,7 +240,7 @@ class Circles {
 		return batch;
 	}
 
-	function buildOpenFL(zones:Array<Ring.Zone>, byRadius:Map<Int, Array<Ring.Dash>>, coreColor:UInt):Void {
+	function buildOpenFL(zones:Array<Ring.Zone>, propTraps:Array<Ring.PropTrap>, byRadius:Map<Int, Array<Ring.Dash>>, coreColor:UInt):Void {
 		var g = shape.graphics;
 		shape.visible = isVisible;
 
@@ -198,6 +260,8 @@ class Circles {
 				}
 			}
 		}
+		for (prop in propTraps)
+			drawOpenFLProp(g, prop.x, prop.y);
 
 		g.lineStyle(CORE_THICKNESS, coreColor, CORE_ALPHA);
 		for (zone in zones) {
@@ -215,5 +279,24 @@ class Circles {
 				}
 			}
 		}
+		if (propTraps.length > 0) {
+			g.lineStyle(CORE_THICKNESS, Ring.COLOR_PROP_TRAP, CORE_ALPHA);
+			for (prop in propTraps)
+				drawOpenFLProp(g, prop.x, prop.y);
+		}
+	}
+
+	static function drawOpenFLProp(g:openfl.display.Graphics, cx:Float, cy:Float):Void {
+		var r = PROP_DIAMOND_RADIUS;
+		var x = PROP_CROSS_RADIUS;
+		g.moveTo(cx, cy - r);
+		g.lineTo(cx + r, cy);
+		g.lineTo(cx, cy + r);
+		g.lineTo(cx - r, cy);
+		g.lineTo(cx, cy - r);
+		g.moveTo(cx - x, cy - x);
+		g.lineTo(cx + x, cy + x);
+		g.moveTo(cx + x, cy - x);
+		g.lineTo(cx - x, cy + x);
 	}
 }
