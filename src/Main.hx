@@ -72,6 +72,9 @@ class Main extends Mod {
 	/** The last tile library read. Keyed by the library's identity: a different library is read again. */
 	var analysed:Null<Analysis> = null;
 
+	/** Cached per-floor GameMaster NPC metadata lookup so `onObjectReady` allocates no closure per spawn. */
+	var npcLookup:Null<String->Ring.NpcMeta> = null;
+
 	/** Every API subscription the mod made, cancelled in `dispose`. */
 	var subscriptions:Array<Subscription> = [];
 
@@ -165,8 +168,11 @@ class Main extends Mod {
 		if (npc == null)
 			return;
 		var facade = ctx == null ? null : ctx.core.facade;
-		if (tracker != null && facade != null)
-			tracker.observeNpc(npc, makeNpcLookup(facade.gameMaster));
+		if (tracker != null && facade != null) {
+			if (npcLookup == null)
+				npcLookup = makeNpcLookup(facade.gameMaster);
+			tracker.observeNpc(npc, npcLookup, true, currentGame);
+		}
 		if (highlights != null && highlights.tryTrack(npc))
 			syncListener();
 	}
@@ -186,6 +192,7 @@ class Main extends Mod {
 	function removeMarkers():Void {
 		currentGame = null;
 		activeZones = [];
+		npcLookup = null;
 		if (tracker != null)
 			tracker.clear();
 		if (hud != null)
@@ -228,6 +235,8 @@ class Main extends Mod {
 			var nowMs = Lib.getTimer();
 			if (tracker != null)
 				tracker.update(nowMs, currentGame);
+			if (rings != null && tracker != null)
+				rings.syncStates(nowMs, tracker);
 			if (highlights != null && highlights.hasActive)
 				highlights.update(nowMs, facade == null ? null : facade.camera);
 			if (hud != null && tracker != null)
@@ -262,6 +271,7 @@ class Main extends Mod {
 		var starlingFloor:Null<StarlingLayer> = ringStarlingLayer(manager);
 
 		var getNpc = makeNpcLookup(facade.gameMaster);
+		npcLookup = getNpc;
 		var cache = analysed;
 		if (cache == null || cache.json != json) {
 			cache = analyse(json, getNpc);
@@ -290,7 +300,7 @@ class Main extends Mod {
 			for (key in actors.keysToArray()) {
 				var npc = Std.downcast(actors.itemFor(key), NPCGameObject);
 				if (npc != null) {
-					tracker.observeNpc(npc, getNpc);
+					tracker.observeNpc(npc, getNpc, false, game);
 					highlights.tryTrack(npc);
 				}
 			}

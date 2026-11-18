@@ -16,6 +16,7 @@ typedef ZoneTargetWatch = {
 typedef ZoneRuntime = {
 	var zone:Ring.Zone;
 	var status:Int;
+	var heroInsideNow:Bool;
 	var hadHeroInside:Bool;
 	var heroEnterMs:Int;
 	var hadLiveSpawn:Bool;
@@ -47,9 +48,18 @@ class ZoneTracker {
 
 	static inline final HERO_TRIGGER_DELAY_MS = 1500;
 
+	/** Lag-compensation margin when matching freshly spawned enemies to a zone before the next tick. */
+	static inline final SPAWN_HERO_MARGIN:Float = 90.0;
+
 	public var items(get, never):Array<ZoneRuntime>;
 
+	/** Incremented whenever any zone changes `status` or `heroInsideNow`, for O(1) floor-ring sync. */
+	public var revision(default, null):Int = 0;
+
 	var zones:Array<ZoneRuntime> = [];
+
+	/** Reusable per-frame buffer for live co-op hero references (avoids steady-state array allocs). */
+	var remotesBuf:Array<HeroGameObject> = [];
 
 	public function new() {}
 
@@ -59,10 +69,12 @@ class ZoneTracker {
 
 	public function reset(nextZones:Array<Ring.Zone>):Void {
 		zones = [];
+		revision++;
 		for (z in nextZones) {
 			zones.push({
 				zone: z,
 				status: STATUS_ARMED,
+				heroInsideNow: false,
 				hadHeroInside: false,
 				heroEnterMs: 0,
 				hadLiveSpawn: false,
@@ -77,10 +89,15 @@ class ZoneTracker {
 
 	public function clear():Void {
 		zones = [];
+		revision++;
 	}
 
-	/** Matches a spawned or existing NPC against any zone's linked trap/gate targets or generator spawns. */
-	public function observeNpc(npc:Null<NPCGameObject>, getNpc:String->Ring.NpcMeta):Void {
+	/**
+	 * Matches an NPC against any zone's linked trap/gate targets or (when `allowSpawns` is true
+	 * and a hero has entered/approached the zone) generator spawns.
+	 */
+	public function observeNpc(npc:Null<NPCGameObject>, getNpc:String->Ring.NpcMeta, allowSpawns:Bool = true,
+			game:Null<DistributedDungeonFloor> = null):Void {
 		if (npc == null || npc.isDestroyed || !npc.hasPosition || npc.actorData == null)
 			return;
 		var constant = npc.actorData.constant;
@@ -90,8 +107,7 @@ class ZoneTracker {
 		var px = npc.positionX;
 		var py = npc.positionY;
 
-		var meta = getNpc(constant);
-		var aliveCombatant = !npc.isDead() && npc.hitPoints > 0 && (meta.isCombatant || constant == "REWARD_CHEST_A");
+		var aliveCombatant = allowSpawns && !npc.isDead() && npc.hitPoints > 0 && (getNpc(constant).isCombatant || constant == "REWARD_CHEST_A");
 
 		for (zr in zones) {
 			// 1. Match linked LETriggerable prop/gate (`triggerState`)
@@ -110,8 +126,10 @@ class ZoneTracker {
 				}
 			}
 
-			// 2. Match newly spawned enemies/chests near linked generators
-			if (aliveCombatant && !zr.spawnIds.exists(idKey)) {
+			// 2. Match newly spawned enemies/chests near linked generators only after a hero engaged the zone
+			if (aliveCombatant && !zr.spawnIds.exists(idKey) && zr.zone.generators.length > 0) {
+				if (!zr.hadHeroInside && !isAnyHeroNear(game, zr.zone.x, zr.zone.y, zr.zone.radius + SPAWN_HERO_MARGIN))
+					continue;
 				for (g in zr.zone.generators) {
 					if (!spawnConstantMatches(g.spawnConstant, constant))
 						continue;
@@ -157,22 +175,23 @@ class ZoneTracker {
 		if (zones.length == 0 || game == null || game.isDestroyed)
 			return;
 
-		// Collect live hero references once for the frame
+		// Collect live hero references once for the frame into the reusable buffer
 		var owner = game.activeOwnerAvatar;
 		var hasOwner = isLiveActor(owner);
-		var remotes:Array<HeroGameObject> = null;
+		remotesBuf.resize(0);
 		if (game.remoteHeroes != null) {
 			for (k in game.remoteHeroes.keysToArray()) {
 				var h = Std.downcast(game.remoteHeroes.itemFor(k), HeroGameObject);
-				if (isLiveActor(h)) {
-					if (remotes == null)
-						remotes = [];
-					remotes.push(h);
-				}
+				if (isLiveActor(h))
+					remotesBuf.push(h);
 			}
 		}
+		var remotes = remotesBuf.length > 0 ? remotesBuf : null;
 
 		for (zr in zones) {
+			var prevStatus = zr.status;
+			var prevInside = zr.heroInsideNow;
+
 			// Prune dead generator spawns
 			var i = zr.spawnNpcs.length - 1;
 			while (i >= 0) {
@@ -188,6 +207,7 @@ class ZoneTracker {
 			// Check hero entry (single hero vs ALL_HERO)
 			var z = zr.zone;
 			var r2 = z.radius * z.radius;
+			var insideNow = false;
 			if (z.isAllHero) {
 				var allInside = hasOwner && inside(owner, z.x, z.y, r2);
 				if (allInside && remotes != null) {
@@ -198,6 +218,7 @@ class ZoneTracker {
 						}
 					}
 				}
+				insideNow = allInside;
 				if (allInside && !zr.hadHeroInside) {
 					zr.hadHeroInside = true;
 					zr.heroEnterMs = nowMs;
@@ -212,11 +233,13 @@ class ZoneTracker {
 						}
 					}
 				}
+				insideNow = anyInside;
 				if (anyInside && !zr.hadHeroInside) {
 					zr.hadHeroInside = true;
 					zr.heroEnterMs = nowMs;
 				}
 			}
+			zr.heroInsideNow = insideNow;
 
 			// Check linked target triggerState (traps/gates/plates)
 			var hasNonPlate = false;
@@ -260,7 +283,26 @@ class ZoneTracker {
 					zr.status = STATUS_ARMED;
 				}
 			}
+
+			if (zr.status != prevStatus || zr.heroInsideNow != prevInside)
+				revision++;
 		}
+	}
+
+	static function isAnyHeroNear(game:Null<DistributedDungeonFloor>, zx:Float, zy:Float, radius:Float):Bool {
+		if (game == null || game.isDestroyed)
+			return false;
+		var r2 = radius * radius;
+		if (isLiveActor(game.activeOwnerAvatar) && inside(game.activeOwnerAvatar, zx, zy, r2))
+			return true;
+		if (game.remoteHeroes != null) {
+			for (k in game.remoteHeroes.keysToArray()) {
+				var h = Std.downcast(game.remoteHeroes.itemFor(k), HeroGameObject);
+				if (isLiveActor(h) && inside(h, zx, zy, r2))
+					return true;
+			}
+		}
+		return false;
 	}
 
 	static inline function spawnConstantMatches(expected:String, actual:String):Bool {

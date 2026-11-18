@@ -113,6 +113,18 @@ typedef Dash = {
 	var to:Float;
 }
 
+/** Visual rhythm, stroke weight, and inward accent profile derived from a zone's severity tier. */
+typedef TierProfile = {
+	var pitch:Float;
+	var fraction:Float;
+	var coreW:Float;
+	var inkW:Float;
+	var washW:Float;
+	var teethCount:Int;
+	var teethDepth:Float;
+	var isUtility:Bool;
+}
+
 private typedef SinkHit = {
 	var object:LibraryObject;
 	var active:Int;
@@ -167,12 +179,12 @@ class Ring {
 	static inline final TIMELINE_TRIGGERABLE = "TIMELINE_TRIGGERABLE";
 
 	/** Target arc pitch (dash + gap) in world units so small and large rings share the same rhythm. */
-	public static inline final DASH_PITCH = 18.0;
+	public static inline final DASH_PITCH = 24.0;
 
 	public static inline final MIN_DASHES = 8;
 
-	/** Drawn share of each slot (leaves clean gaps around the cased dash caps). */
-	public static inline final DASH_FRACTION = 0.42;
+	/** Drawn share of each slot (leaves clean gaps around the cased pill dash caps). */
+	public static inline final DASH_FRACTION = 0.48;
 
 	/**
 	 * Electric rose-magenta (#FF4794, H=335°): extra-spectral cue outside every DRH ground palette
@@ -199,6 +211,59 @@ class Ring {
 	/** Returns the floor-invariant rose-magenta hazard color across all DRH biomes. */
 	public static function colorForFloor(theme:Null<String>, map:Null<String>):UInt {
 		return COLOR_ROSE;
+	}
+
+	/**
+	 * Pre-attentive geometric profile by threat tier (stroke weight, dash duty, inward rim wash,
+	 * and inward perimeter teeth) so tiers separate under all CVD profiles with zero center clutter.
+	 */
+	public static function tierProfile(zone:Zone):TierProfile {
+		if (zone.severity >= SEVERITY_BOSS) {
+			return {
+				pitch: 28.0,
+				fraction: 0.58,
+				coreW: 4.6,
+				inkW: 9.4,
+				washW: 14.0,
+				teethCount: 8,
+				teethDepth: 11.0,
+				isUtility: false
+			};
+		}
+		if (zone.severity >= SEVERITY_AMBUSH) {
+			return {
+				pitch: 26.0,
+				fraction: 0.54,
+				coreW: 4.0,
+				inkW: 8.4,
+				washW: 11.0,
+				teethCount: 4,
+				teethDepth: 8.0,
+				isUtility: false
+			};
+		}
+		if (zone.severity >= SEVERITY_TRAP) {
+			return {
+				pitch: 24.0,
+				fraction: 0.48,
+				coreW: 3.4,
+				inkW: 7.6,
+				washW: 9.0,
+				teethCount: 0,
+				teethDepth: 0.0,
+				isUtility: false
+			};
+		}
+		return {
+			pitch: 22.0,
+			fraction: 0.30,
+			coreW: 2.6,
+			inkW: 6.2,
+			washW: 0.0,
+			teethCount: 0,
+			teethDepth: 0.0,
+			isUtility: true
+		};
 	}
 
 	/**
@@ -353,14 +418,14 @@ class Ring {
 	}
 
 	/** The dashes for a ring of `radius`: uniform world-space pitch, at least `MIN_DASHES`. */
-	public static function dashesForRadius(radius:Float):Array<Dash> {
-		var raw = Math.round(2 * Math.PI * radius / DASH_PITCH);
+	public static function dashesForRadius(radius:Float, pitch:Float = DASH_PITCH, fraction:Float = DASH_FRACTION):Array<Dash> {
+		var raw = Math.round(2 * Math.PI * radius / pitch);
 		var count = raw < MIN_DASHES ? MIN_DASHES : raw;
 		var slot = 2 * Math.PI / count;
 		var out:Array<Dash> = [];
 		for (i in 0...count) {
 			var from = i * slot;
-			out.push({from: from, to: from + slot * DASH_FRACTION});
+			out.push({from: from, to: from + slot * fraction});
 		}
 		return out;
 	}
@@ -379,9 +444,11 @@ class Ring {
 		var hits:Array<SinkHit> = [];
 		var hitKeys = new Map<String, Bool>();
 
-		while (qIds.length > 0) {
-			var id = qIds.shift();
-			var state = qStates.shift();
+		var head = 0;
+		while (head < qIds.length) {
+			var id = qIds[head];
+			var state = qStates[head];
+			head++;
 			var nexts = childrenOf.get(id);
 			if (nexts == null)
 				continue;
