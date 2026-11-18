@@ -1,8 +1,8 @@
 {
   "id": "proximity_circle",
   "name": "Proximity Circle",
-  "description": "Marks floor traps and shiny trap objects, with a live HUD showing what nearby triggers spawn. Press R to toggle.",
-  "version": "0.6.0",
+  "description": "Marks floor traps and shiny trap objects, with a native HUD showing live trap state. Press R to toggle.",
+  "version": "0.7.0",
   "author": "Astra",
   "api": "1.4",
   "drh": "18",

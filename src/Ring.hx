@@ -6,21 +6,51 @@ typedef NpcMeta = {
 	var name:String;
 	var isBoss:Bool;
 	var isExploding:Bool;
+	var isCombatant:Bool;
 }
 
-/** Human-readable outcome and threat tier for a trigger or trap prop. */
+/** Expected generator spawn coordinates and constant linked to a trigger. */
+typedef ZoneSpawnRef = {
+	var x:Float;
+	var y:Float;
+	var spawnConstant:String;
+	var maxSpawns:Int;
+}
+
+/** Expected trap/gate object coordinates and post-trigger `triggerState` (`1` = active, `0` = off). */
+typedef ZoneTargetRef = {
+	var x:Float;
+	var y:Float;
+	var constant:String;
+	var expectedActive:Int;
+	var isPlate:Bool;
+}
+
+/** Human-readable outcome, threat tier, and linked runtime sinks for a trigger or trap prop. */
 typedef Outcome = {
 	var summary:String;
 	var severity:Int;
+	var hasGenerator:Bool;
+	var isDisarmOnly:Bool;
+	var isGateOpenOnly:Bool;
+	var generators:Array<ZoneSpawnRef>;
+	var targets:Array<ZoneTargetRef>;
 }
 
-/** A zone in world units: its centre, radius, and what stepping on it triggers. */
+/** A zone in world units: its centre, radius, outcome, and linked runtime spawn/target refs. */
 typedef Zone = {
 	var x:Float;
 	var y:Float;
 	var radius:Float;
 	var summary:String;
 	var severity:Int;
+	var isOnce:Bool;
+	var isAllHero:Bool;
+	var hasGenerator:Bool;
+	var isDisarmOnly:Bool;
+	var isGateOpenOnly:Bool;
+	var generators:Array<ZoneSpawnRef>;
+	var targets:Array<ZoneTargetRef>;
 }
 
 /** A destructible prop trap in world units: position, constant, and what happens if hit/broken. */
@@ -32,6 +62,7 @@ typedef PropTrap = {
 	var triggerKind:String;
 	var summary:String;
 	var severity:Int;
+	var hasGenerator:Bool;
 }
 
 typedef PropEntry = {
@@ -54,7 +85,7 @@ typedef TileInfo = {
 
 /**
  * An object of a tile in the library, as the library gives it: its id, type, constant and offset.
- * Flash's exporter omits `x` or `y` when 0, so coordinates and optional generator fields are nullable.
+ * Flash's exporter omits `x` or `y` when 0, so coordinates and optional fields are nullable.
  */
 typedef LibraryObject = {
 	var id:String;
@@ -67,6 +98,7 @@ typedef LibraryObject = {
 	@:optional var spawnConstant:Null<String>;
 	@:optional var maxSpawns:Null<Int>;
 	@:optional var maxPopulation:Null<Int>;
+	@:optional var triggerOnce:Null<Bool>;
 }
 
 /** A wire of the library: the object `triggerId` drives the object `triggerableId`. */
@@ -176,7 +208,7 @@ class Ring {
 
 	/**
 	 * Resolves drawable proximity zones and destructible prop traps along with human-readable
-	 * outcome summaries by walking forward with `NOT_GATE` parity from each trigger.
+	 * outcome summaries and runtime sink references in one forward parity pass per trigger.
 	 */
 	public static function drawableSet(objects:Array<LibraryObject>, links:Array<Link>, getNpc:String->NpcMeta):DrawableSet {
 		var known = new Map<String, LibraryObject>();
@@ -246,7 +278,7 @@ class Ring {
 		return out;
 	}
 
-	/** The zones of the floor's tiles that are in `drawable`. */
+	/** The zones of the floor's tiles that are in `drawable`, with world-space generator & target refs. */
 	public static function zonesOf(tiles:Array<TileInfo>, objectsByTile:Map<String, Array<LibraryObject>>, drawable:Map<String, Outcome>):Array<Zone> {
 		var out:Array<Zone> = [];
 		for (tile in tiles) {
@@ -261,12 +293,36 @@ class Ring {
 				var r = coord(object.radius);
 				if (r <= 0)
 					continue;
+				var worldGens:Array<ZoneSpawnRef> = [
+					for (g in outcome.generators) {
+						x: tile.x + g.x,
+						y: tile.y + g.y,
+						spawnConstant: g.spawnConstant,
+						maxSpawns: g.maxSpawns
+					}
+				];
+				var worldTargets:Array<ZoneTargetRef> = [
+					for (t in outcome.targets) {
+						x: tile.x + t.x,
+						y: tile.y + t.y,
+						constant: t.constant,
+						expectedActive: t.expectedActive,
+						isPlate: t.isPlate
+					}
+				];
 				out.push({
 					x: tile.x + coord(object.x),
 					y: tile.y + coord(object.y),
 					radius: r,
 					summary: outcome.summary,
-					severity: outcome.severity
+					severity: outcome.severity,
+					isOnce: object.triggerOnce == true,
+					isAllHero: object.constant == CONSTANT_ALL_HERO,
+					hasGenerator: outcome.hasGenerator,
+					isDisarmOnly: outcome.isDisarmOnly,
+					isGateOpenOnly: outcome.isGateOpenOnly,
+					generators: worldGens,
+					targets: worldTargets
 				});
 			}
 		}
@@ -293,7 +349,8 @@ class Ring {
 					propName: cleanPropName(getNpc(object.constant).name, object.constant),
 					triggerKind: entry.triggerKind,
 					summary: entry.outcome.summary,
-					severity: entry.outcome.severity
+					severity: entry.outcome.severity,
+					hasGenerator: entry.outcome.hasGenerator
 				});
 			}
 		}
@@ -367,15 +424,28 @@ class Ring {
 		var spawnMeta = new Map<String, {name:String, sev:Int}>();
 		var otherClauses:Array<{label:String, sev:Int}> = [];
 		var otherSeen = new Map<String, Bool>();
+		var generators:Array<ZoneSpawnRef> = [];
+		var targets:Array<ZoneTargetRef> = [];
 		var maxSev = SEVERITY_GATE;
+		var allDisarm = true;
+		var allGateOpen = true;
+		var hasAnyNonGen = false;
 
 		for (hit in hits) {
 			var obj = hit.object;
 			if ((obj.type == GEN_TYPE || obj.type == GEN_DEAD_TYPE) && obj.spawnConstant != null) {
 				if (hit.active == 0)
 					continue;
+				allDisarm = false;
+				allGateOpen = false;
 				var sc = obj.spawnConstant;
 				var count = obj.maxSpawns != null && obj.maxSpawns > 0 ? obj.maxSpawns : 1;
+				generators.push({
+					x: coord(obj.x),
+					y: coord(obj.y),
+					spawnConstant: sc,
+					maxSpawns: count
+				});
 				if (!spawnCounts.exists(sc)) {
 					spawnCounts.set(sc, count);
 					spawnOrder.push(sc);
@@ -387,12 +457,26 @@ class Ring {
 				if (sev > maxSev)
 					maxSev = sev;
 			} else {
+				hasAnyNonGen = true;
 				var classified = classifyNonGenerator(obj, hit.active);
 				if (classified.sev > maxSev)
 					maxSev = classified.sev;
+				if (classified.label != "Disarms Trap")
+					allDisarm = false;
+				if (classified.label != "Opens Gate" && classified.label != "Opens Wall")
+					allGateOpen = false;
 				if (!otherSeen.exists(classified.label)) {
 					otherSeen.set(classified.label, true);
 					otherClauses.push(classified);
+				}
+				if (obj.constant != null && obj.constant != SUICIDE && obj.type == "LETriggerable") {
+					targets.push({
+						x: coord(obj.x),
+						y: coord(obj.y),
+						constant: obj.constant,
+						expectedActive: hit.active,
+						isPlate: obj.constant.indexOf("TRAP_TRIGGER") >= 0
+					});
 				}
 			}
 		}
@@ -434,7 +518,12 @@ class Ring {
 
 		return {
 			summary: combined.length > 0 ? combined.join(" + ") : "Trap Trigger",
-			severity: maxSev
+			severity: maxSev,
+			hasGenerator: generators.length > 0,
+			isDisarmOnly: hasAnyNonGen && generators.length == 0 && allDisarm,
+			isGateOpenOnly: hasAnyNonGen && generators.length == 0 && allGateOpen,
+			generators: generators,
+			targets: targets
 		};
 	}
 
@@ -571,7 +660,8 @@ class Ring {
 			isProp: false,
 			name: humanizeConstant(constant),
 			isBoss: constant.indexOf("BOSS") >= 0 || constant.indexOf("JUGGERNAUT") >= 0,
-			isExploding: constant.indexOf("EXPLODING_BARREL") >= 0
+			isExploding: constant.indexOf("EXPLODING_BARREL") >= 0,
+			isCombatant: false
 		};
 	}
 }

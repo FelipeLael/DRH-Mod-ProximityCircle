@@ -1,6 +1,7 @@
 package mods.proximity_circle.ui;
 
 import actor.ActorRenderer;
+import brain.camera.Camera;
 import distributedObjects.NPCGameObject;
 import mods.proximity_circle.Ring;
 import openfl.Lib;
@@ -11,6 +12,14 @@ typedef TrackedProp = {
 	var trap:Ring.PropTrap;
 	var renderer:Null<ActorRenderer>;
 	var phase:Float;
+	var initialHp:UInt;
+}
+
+typedef BrokenProp = {
+	var x:Float;
+	var y:Float;
+	var trap:Ring.PropTrap;
+	var expiresAtMs:Int;
 }
 
 /**
@@ -24,8 +33,9 @@ typedef TrackedProp = {
  *   luminance contrast.
  * - `StarlingActorRenderer` chains `mPersistentGlowFilter` separately from `mHighlightFilter`, so
  *   hovering a marked prop never clears its trap highlight.
- * - ~1.0 Hz smooth sine modulation stays safely below the 3 Hz WCAG photosensitive threshold, with
- *   per-entity phase offsets to prevent synchronized strobing.
+ * - Shimmer updates are skipped for props outside the camera cull bounds so off-screen objects incur
+ *   zero per-frame Symbol/ColorTransformStyle traversal, while `setPersistentGlowFilter` remains
+ *   attached for instant pop-free re-entry.
  */
 class PropHighlight {
 	/** Electric violet-magenta outer aura: distinct from gold loot/hover and red selection. */
@@ -42,14 +52,24 @@ class PropHighlight {
 
 	static inline final SHIMMER_MAX:Float = 0.38;
 
+	static inline final SHIMMER_TRIGGERED_MAX:Float = 0.16;
+
 	static inline final PULSE_RAD_PER_MS:Float = 0.0062831853; // 2 * pi * 1.0 Hz / 1000 ms
 
 	/** Coordinate tolerance matching `TileFactory.getForceFlashForNpc` (`< 0.5`). */
 	static inline final POS_TOLERANCE:Float = 0.5;
 
+	/** Generous margin past camera edges so shimmer refreshes just before Starling un-culls the prop. */
+	static inline final CAMERA_CULL_MARGIN:Float = 350.0;
+
+	/** Retain broken-prop summary briefly so the player sees what breaking it just spawned. */
+	static inline final BROKEN_MEMORY_MS:Int = 6500;
+
 	public var hasActive(get, never):Bool;
 
 	public var entries(get, never):Array<TrackedProp>;
+
+	public var recentBroken(get, never):Array<BrokenProp>;
 
 	var trapsByConstant:Map<String, Array<Ring.PropTrap>> = new Map();
 
@@ -57,16 +77,22 @@ class PropHighlight {
 
 	var trackedIds:Map<String, Bool> = new Map();
 
+	var broken:Array<BrokenProp> = [];
+
 	var isVisible:Bool = true;
 
 	public function new() {}
 
 	function get_hasActive():Bool {
-		return tracked.length > 0;
+		return tracked.length > 0 || broken.length > 0;
 	}
 
 	function get_entries():Array<TrackedProp> {
 		return tracked;
+	}
+
+	function get_recentBroken():Array<BrokenProp> {
+		return broken;
 	}
 
 	/** Replaces the floor's expected prop-trap coordinates and clears any previous floor highlights. */
@@ -115,7 +141,8 @@ class PropHighlight {
 			npc: npc,
 			trap: matched,
 			renderer: rendererOf(npc),
-			phase: ((npc.id : Int) % 64) * 0.27
+			phase: ((npc.id : Int) % 64) * 0.27,
+			initialHp: npc.hitPoints
 		};
 		tracked.push(entry);
 		trackedIds.set(key, true);
@@ -125,15 +152,17 @@ class PropHighlight {
 	}
 
 	/** Stops tracking and removes any highlight from object `id` (on despawn or death). */
-	public function untrack(id:UInt):Void {
+	public function untrack(id:UInt, nowMs:Int):Void {
 		var key = Std.string(id);
 		if (!trackedIds.exists(key))
 			return;
 		trackedIds.remove(key);
 		var i = tracked.length - 1;
 		while (i >= 0) {
-			if (tracked[i].idKey == key) {
-				clearRenderer(tracked[i].renderer);
+			var entry = tracked[i];
+			if (entry.idKey == key) {
+				recordBroken(entry, nowMs);
+				clearRenderer(entry.renderer);
 				tracked.splice(i, 1);
 			}
 			i--;
@@ -158,12 +187,23 @@ class PropHighlight {
 		}
 	}
 
-	/** Advances the 1.0 Hz shimmer on live props and strips dead props immediately before fadeout. */
-	public function update(nowMs:Int):Void {
+	/**
+	 * Advances the 1.0 Hz shimmer only on tracked props near the camera, swaps renderers if bound
+	 * lazily, and retires dead props immediately while keeping a brief post-break confirmation.
+	 */
+	public function update(nowMs:Int, camera:Null<Camera>):Void {
+		var bi = broken.length - 1;
+		while (bi >= 0) {
+			if (nowMs >= broken[bi].expiresAtMs)
+				broken.splice(bi, 1);
+			bi--;
+		}
+
 		var i = tracked.length - 1;
 		while (i >= 0) {
 			var entry = tracked[i];
 			if (!isAliveProp(entry.npc)) {
+				recordBroken(entry, nowMs);
 				clearRenderer(entry.renderer);
 				trackedIds.remove(entry.idKey);
 				tracked.splice(i, 1);
@@ -177,8 +217,14 @@ class PropHighlight {
 				if (isVisible && r != null)
 					r.setPersistentGlowFilter(GLOW_COLOR, GLOW_ALPHA, GLOW_BLUR);
 			}
-			if (isVisible && r != null)
-				r.applyStatusTint(SHIMMER_COLOR, shimmerAmount(nowMs, entry.phase));
+			if (isVisible && r != null) {
+				var offScreen = r.isCulled || (camera != null && entry.npc.hasPosition && !camera.isInCullView(entry.npc.positionX, entry.npc.positionY, CAMERA_CULL_MARGIN));
+				if (!offScreen) {
+					var alreadyHitTriggered = entry.trap.triggerKind == "HIT" && isDamaged(entry);
+					var maxAmt = alreadyHitTriggered ? SHIMMER_TRIGGERED_MAX : SHIMMER_MAX;
+					r.applyStatusTint(SHIMMER_COLOR, shimmerAmount(nowMs, entry.phase, maxAmt));
+				}
+			}
 			i--;
 		}
 	}
@@ -189,6 +235,30 @@ class PropHighlight {
 		tracked = [];
 		trackedIds = new Map();
 		trapsByConstant = new Map();
+		broken = [];
+	}
+
+	public static function isDamaged(entry:TrackedProp):Bool {
+		var npc = entry.npc;
+		if (npc.hitPoints < entry.initialHp)
+			return true;
+		var maxInt = Std.int(npc.maxHitPoints);
+		return maxInt > 1 && npc.hitPoints < (maxInt : UInt);
+	}
+
+	function recordBroken(entry:TrackedProp, nowMs:Int):Void {
+		// Record only when the player actually broke it (HP dropped / ActorDeadState), not floor teardown.
+		var npc = entry.npc;
+		if (npc == null || (!npc.isDead() && npc.hitPoints > 0))
+			return;
+		var px = npc.hasPosition ? npc.positionX : entry.trap.x;
+		var py = npc.hasPosition ? npc.positionY : entry.trap.y;
+		broken.push({
+			x: px,
+			y: py,
+			trap: entry.trap,
+			expiresAtMs: nowMs + BROKEN_MEMORY_MS
+		});
 	}
 
 	static function applyEntry(entry:TrackedProp, nowMs:Int):Void {
@@ -196,12 +266,13 @@ class PropHighlight {
 		if (r == null)
 			return;
 		r.setPersistentGlowFilter(GLOW_COLOR, GLOW_ALPHA, GLOW_BLUR);
-		r.applyStatusTint(SHIMMER_COLOR, shimmerAmount(nowMs, entry.phase));
+		var alreadyHitTriggered = entry.trap.triggerKind == "HIT" && isDamaged(entry);
+		r.applyStatusTint(SHIMMER_COLOR, shimmerAmount(nowMs, entry.phase, alreadyHitTriggered ? SHIMMER_TRIGGERED_MAX : SHIMMER_MAX));
 	}
 
-	static inline function shimmerAmount(nowMs:Int, phase:Float):Float {
+	static inline function shimmerAmount(nowMs:Int, phase:Float, maxAmt:Float):Float {
 		var wave = 0.5 + 0.5 * Math.sin(nowMs * PULSE_RAD_PER_MS + phase);
-		return SHIMMER_MIN + (SHIMMER_MAX - SHIMMER_MIN) * wave;
+		return SHIMMER_MIN + (maxAmt - SHIMMER_MIN) * wave;
 	}
 
 	public static inline function isAliveProp(npc:Null<NPCGameObject>):Bool {
