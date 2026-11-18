@@ -14,14 +14,17 @@ typedef TileInfo = {
 	var y:Int;
 }
 
-/** An object of a tile in the library, as the library gives it: its id, type, constant and offset. */
+/**
+ * An object of a tile in the library, as the library gives it: its id, type, constant and offset.
+ * Flash's exporter omits `x` or `y` when 0, so coordinates and radius are nullable.
+ */
 typedef LibraryObject = {
 	var id:String;
-	var type:String;
-	var constant:String;
-	var x:Int;
-	var y:Int;
-	var radius:Float;
+	var type:Null<String>;
+	var constant:Null<String>;
+	@:optional var x:Null<Float>;
+	@:optional var y:Null<Float>;
+	@:optional var radius:Null<Float>;
 }
 
 /** A wire of the library: the object `triggerId` drives the object `triggerableId`. */
@@ -37,63 +40,95 @@ typedef Dash = {
 }
 
 /**
- * The zones' rule and arithmetic, free of the game.
+ * The zones' rule, colour selection and arithmetic, free of the game.
  *
- * In the game's data a zone is a `LETrigger` object with the constant `PROXIMITY_TRIGGER`, inside a
- * tile of the library. Its centre is the tile's top-left corner plus the object's `x` and `y`, and
- * its radius is the object's `radius`.
+ * In the game's data a zone is a `LETrigger` object with `PROXIMITY_TRIGGER` or `PROXIMITY_ALL_HERO`,
+ * inside a tile of the library. Its centre is the tile's top-left corner plus `(x ?? 0, y ?? 0)`, and
+ * its radius is `radius`.
  *
- * A zone gets a ring only if it does something: it is wired, through gates, timers and other zones,
- * to an object that acts (a trap, a generator, an NPC...). It gets no ring when it feeds an
- * `NPC_SUICIDE_TRIGGER` (the trigger that makes an NPC blow itself up, such as an exploding barrel).
- * A wire to an object the library does not have is nothing: the game ignores it.
+ * A zone gets a ring only if it reaches at least one gameplay-acting object (traps, gates/walls,
+ * switches, monster generators...) through logic gates, timers and chained zones. Purely cosmetic
+ * sinks (camera shakes, sound cues, floor text) and `NPC_SUICIDE_TRIGGER` (bare exploding-barrel
+ * fuses) do not count as acting, without vetoing zones that also drive real traps or ambushes.
  */
 class Ring {
 	public static inline final TYPE = "LETrigger";
 
 	public static inline final CONSTANT = "PROXIMITY_TRIGGER";
 
+	public static inline final CONSTANT_ALL_HERO = "PROXIMITY_ALL_HERO";
+
 	public static inline final SUICIDE = "NPC_SUICIDE_TRIGGER";
 
-	/** Objects that only pass a signal on: gates, timers and zones. */
+	/** Objects that only pass a signal on: gates, timers and chained proximity zones. */
 	static inline final GATE_TYPE = "LETriggerGate";
 
 	static inline final AUTO_TIMER = "AUTO_TIMER_TRIGGER";
 
 	static inline final ASYM_AUTO_TIMER = "ASYM_AUTO_TIMER_TRIGGER";
 
+	/** Non-gameplay feedback sinks that should not by themselves produce a hazard ring. */
+	static inline final CAMERA_TRIGGERABLE_TYPE = "LETriggerableCamera";
+
+	static inline final FLOOR_MESSAGE = "FLOOR_MESSAGE_TRIGGERABLE";
+
+	static inline final PLAY_SOUND = "PLAY_SOUND_TRIGGERABLE";
+
 	/** Target arc pitch (dash + gap) in world units so small and large rings share the same rhythm. */
 	public static inline final DASH_PITCH = 18.0;
 
 	public static inline final MIN_DASHES = 8;
 
-	/** Drawn share of each slot (leaves clean gaps even with round line caps). */
+	/** Drawn share of each slot (leaves clean gaps around the cased dash caps). */
 	public static inline final DASH_FRACTION = 0.42;
 
+	/** Flame tangerine-red (#FF781F): high-luminance hazard core for dark, cool and neutral stone maps. */
+	public static inline final COLOR_FLAME:UInt = 0xFF781F;
+
+	/** Cerise-crimson (#FF476C): blue-lifted hazard core for saturated green grass and bright warm sand. */
+	public static inline final COLOR_CRIMSON:UInt = 0xFF476C;
+
+	/** True when `object` is a hero proximity trigger zone (`PROXIMITY_TRIGGER` or `PROXIMITY_ALL_HERO`). */
+	public static function isZone(object:LibraryObject):Bool {
+		return object != null
+			&& object.type == TYPE
+			&& (object.constant == CONSTANT || object.constant == CONSTANT_ALL_HERO);
+	}
+
 	/**
-	 * The ids of the zones to draw, as keys: a zone that does something, and does not feed a suicide
-	 * trigger. Found by two walks backward over the wires, from the acting objects and from the suicide
-	 * triggers: one pass over the library, whatever the number of zones. Run once per library.
+	 * Biome-adaptive 2-hue hazard palette (Option A): selects cerise-crimson on saturated green jungle
+	 * and bright warm arena sand (avoiding Protan/Deutan red-green and warm-sand collisions), and flame
+	 * tangerine-red across dark, icy and stone biomes.
+	 */
+	public static function colorForFloor(theme:Null<String>, map:Null<String>):UInt {
+		var key = theme != null && theme != "" ? theme.toUpperCase() : (map == null ? "" : map.toUpperCase());
+		if (key.indexOf("ARENA") >= 0 || key.indexOf("DINO") >= 0 || key.indexOf("TRIBAL") >= 0)
+			return COLOR_CRIMSON;
+		return COLOR_FLAME;
+	}
+
+	/**
+	 * The ids of the zones to draw, as keys: every proximity zone wired to at least one gameplay-acting
+	 * object. Found in one backward pass from the acting objects over the library's wires.
 	 */
 	public static function drawable(objects:Array<LibraryObject>, links:Array<Link>):Map<String, Bool> {
 		var known = new Map<String, Bool>();
 		var acting:Array<String> = [];
-		var suicide:Array<String> = [];
 		var zones:Array<String> = [];
 		for (object in objects) {
+			if (object == null || object.id == null)
+				continue;
 			known.set(object.id, true);
-			if (!isPassing(object))
+			if (!isPassing(object) && !isIgnoredSink(object))
 				acting.push(object.id);
-			if (object.constant == SUICIDE)
-				suicide.push(object.id);
-			if (object.type == TYPE && object.constant == CONSTANT)
+			if (isZone(object))
 				zones.push(object.id);
 		}
 
 		// Who drives whom, counting only wires whose two ends are objects of the library.
 		var driversOf = new Map<String, Array<String>>();
 		for (link in links) {
-			if (!known.exists(link.triggerId) || !known.exists(link.triggerableId))
+			if (link == null || !known.exists(link.triggerId) || !known.exists(link.triggerableId))
 				continue;
 			if (!driversOf.exists(link.triggerableId))
 				driversOf.set(link.triggerableId, []);
@@ -101,10 +136,9 @@ class Ring {
 		}
 
 		var doesSomething = reach(acting, driversOf);
-		var feedsSuicide = reach(suicide, driversOf);
 		var out = new Map<String, Bool>();
 		for (id in zones)
-			if (doesSomething.exists(id) && !feedsSuicide.exists(id))
+			if (doesSomething.exists(id))
 				out.set(id, true);
 		return out;
 	}
@@ -113,11 +147,20 @@ class Ring {
 	public static function zonesOf(tiles:Array<TileInfo>, objectsByTile:Map<String, Array<LibraryObject>>, drawable:Map<String, Bool>):Array<Zone> {
 		var out:Array<Zone> = [];
 		for (tile in tiles) {
-			if (!objectsByTile.exists(tile.id))
+			if (tile == null || !objectsByTile.exists(tile.id))
 				continue;
-			for (object in objectsByTile.get(tile.id))
-				if (object.type == TYPE && object.constant == CONSTANT && drawable.exists(object.id))
-					out.push({x: tile.x + object.x, y: tile.y + object.y, radius: object.radius});
+			for (object in objectsByTile.get(tile.id)) {
+				if (!isZone(object) || !drawable.exists(object.id))
+					continue;
+				var r = coord(object.radius);
+				if (r <= 0)
+					continue;
+				out.push({
+					x: tile.x + coord(object.x),
+					y: tile.y + coord(object.y),
+					radius: r
+				});
+			}
 		}
 		return out;
 	}
@@ -135,15 +178,27 @@ class Ring {
 		return out;
 	}
 
-	/** Gates, timers and zones only pass a signal on; any other object acts. */
+	static inline function coord(value:Null<Float>):Float {
+		return value == null || Math.isNaN(value) ? 0.0 : value;
+	}
+
+	/** Gates, timers and proximity zones only pass a signal on. */
 	static function isPassing(object:LibraryObject):Bool {
 		return object.type == GATE_TYPE
-			|| object.constant == CONSTANT
+			|| isZone(object)
 			|| object.constant == AUTO_TIMER
 			|| object.constant == ASYM_AUTO_TIMER;
 	}
 
-	/** Every object that reaches one of the seeds by following wires forward, the seeds included. */
+	/** Barrel self-destructs and purely cosmetic audio/camera/text triggers do not count as hazards. */
+	static function isIgnoredSink(object:LibraryObject):Bool {
+		return object.constant == SUICIDE
+			|| object.type == CAMERA_TRIGGERABLE_TYPE
+			|| object.constant == FLOOR_MESSAGE
+			|| object.constant == PLAY_SOUND;
+	}
+
+	/** Every object that reaches one of the seeds by following wires backward, the seeds included. */
 	static function reach(seeds:Array<String>, driversOf:Map<String, Array<String>>):Map<String, Bool> {
 		var found = new Map<String, Bool>();
 		var queue:Array<String> = [];

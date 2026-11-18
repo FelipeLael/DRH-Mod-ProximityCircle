@@ -1,13 +1,13 @@
 # Proximity Circle
 
 <!-- drh:show -->
-Draws a translucent dashed coral-red warning ring with a dark contrast halo around each proximity trigger on the dungeon floor, so you can see where they are without hiding the ground underneath.
+Draws a crisp dashed hazard ring with a deep obsidian contrast casing around each gameplay proximity trigger on the dungeon floor, keeping floor cues inside completely clear.
 
-- Triggers that do nothing get no ring.
-- Triggers that set off an exploding barrel (any trigger that feeds an `NPC_SUICIDE_TRIGGER`) get no ring.
-- Dash spacing scales with ring radius so small and large triggers stay equally crisp.
-- Rings move with the floor and stay under every menu, popup and the HUD.
-- The rings are drawn on the game's world layer 70, above heroes and monsters, because the game draws the world with Starling underneath.
+- Biome-adaptive 2-hue hazard palette (`#FF781F` flame tangerine-red on dark, icy and stone maps; `#FF476C` cerise-crimson on saturated green jungle and bright warm arena sand) over an `#08080E` casing for strong contrast and colour-vision safety across every tileset.
+- Covers both single-hero (`PROXIMITY_TRIGGER`) and party (`PROXIMITY_ALL_HERO`) proximity zones.
+- Ignores bare exploding-barrel fuses (`NPC_SUICIDE_TRIGGER`) and purely cosmetic camera, sound or text triggers without hiding real traps or ambushes.
+- Automatically updates when secret rooms open mid-floor.
+- Rendered natively on Starling's floor layer beneath heroes, monsters, walls, room fades and the HUD, with zero click blocking.
 
 ## Controls
 

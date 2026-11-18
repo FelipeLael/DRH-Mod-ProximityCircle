@@ -5,7 +5,7 @@ enum Phase<T> {
 	/** No floor: in town, or before the first floor. Nothing is drawn and nothing runs. */
 	Idle;
 
-	/** A floor was entered and its rings are not built yet; the frames so far are counted. */
+	/** A floor was entered (or updated) and its rings are not built yet; the frames so far are counted. */
 	Waiting(floor:T, frames:Int);
 
 	/** The floor's rings are built and placed. */
@@ -63,6 +63,14 @@ class FloorState<T> {
 	/** A floor starts. Any floor still shown or waited for is replaced. */
 	public function enter(floor:T):Void {
 		phase = Waiting(floor, 0);
+	}
+
+	/** A shown floor gained new tiles (such as a revealed secret room): rebuild on the next frame. */
+	public function refresh():Void {
+		switch phase {
+			case Shown(floor): phase = Waiting(floor, 0);
+			case _:
+		}
 	}
 
 	/** The floor ends, or town is entered. Valid from any phase. */

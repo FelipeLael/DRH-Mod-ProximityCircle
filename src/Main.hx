@@ -1,7 +1,10 @@
 package mods.proximity_circle;
 
+import brain.gameObject.GameObject;
 import brain.sceneGraph.SceneGraphManager;
+import brain.starling.StarlingLayer;
 import distributedObjects.DistributedDungeonFloor;
+import modding.ModSubscription;
 import mods.api.Context;
 import mods.api.Mod;
 import mods.api.Subscription;
@@ -9,34 +12,32 @@ import mods.api.dungeon.Floor;
 import mods.proximity_circle.ui.Circles;
 import openfl.events.Event;
 
-/** A tile library read once: its objects by tile, and the zones that get a ring. */
+/** A tile library read once: its theme, its objects by tile, and the zones that get a ring. */
 typedef Analysis = {
 	var json:Dynamic;
+	var theme:String;
 	var objectsByTile:Map<String, Array<Ring.LibraryObject>>;
 	var drawable:Map<String, Bool>;
 }
 
 /**
- * Draws a dashed ring around each proximity trigger on the dungeon floor that does something, at the
- * trigger's place and radius. Triggers that do nothing, and triggers that set off an exploding barrel,
- * get no ring.
+ * Draws a cased dashed warning ring around each gameplay-acting proximity trigger on the dungeon floor,
+ * using a biome-adaptive 2-hue hazard palette (`#FF781F` flame / `#FF476C` cerise-crimson) over an
+ * `#08080E` obsidian contrast casing.
  *
- * The rings sit on the game's world layer 70, so the camera moves them with the floor and every popup,
- * menu and the HUD draws above them. Because the game draws world characters with Starling underneath,
- * the rings are drawn above heroes and monsters. They are built once per floor; while a floor is shown,
- * nothing runs per frame.
- *
- * All the mod's state is in three places: `state` (which floor, and whether it is built), `rings`
- * (the one shape) and `analysed` (the last tile library read, reused by floors of the same library).
+ * Rings render on a dedicated world `StarlingLayer` (`sortIndex = 12`), placing them directly on the
+ * dungeon floor above ground tiles and floor rugs (`5`/`10`) and beneath heroes, monsters, walls (`20`),
+ * room fades (`46`) and the Starling HUD (`64`), with zero `nativeOverlay` hit-test or click-blocking cost.
+ * When a secret room opens mid-floor (`DistributedDungeonFloor.tiles`), the rings rebuild once.
  */
 class Main extends Mod {
-	/**
-	 * The world's layer 70 (`GroundLayer2`): inside the world, so the camera moves it, and below every
-	 * popup, menu and the HUD. Drawn above heroes and monsters because Starling draws underneath.
-	 * Not layer 5: a floor's build clears layer 5, which would take the rings with it. Layer 70 is
-	 * never cleared, nor hidden by the game's UI toggle.
-	 */
-	static inline final RING_LAYER = 70;
+	/** Starling world layer index: above ground (5) and floor decals (10), below sorted actors/walls (20). */
+	static inline final STARLING_RING_LAYER = 12;
+
+	/** Fallback OpenFL world layer (`GroundLayer2`) used only if Starling rendering is unavailable. */
+	static inline final FALLBACK_RING_LAYER = 70;
+
+	static inline final TILES_FIELD = "DistributedDungeonFloor.tiles";
 
 	/** R key (82), rebindable under CONTROLS in the settings menu. */
 	static inline final TOGGLE_KEY:UInt = 82;
@@ -52,8 +53,11 @@ class Main extends Mod {
 	/** The last tile library read. Keyed by the library's identity: a different library is read again. */
 	var analysed:Null<Analysis> = null;
 
-	/** Every subscription the mod made, cancelled in `dispose`. */
+	/** Every API subscription the mod made, cancelled in `dispose`. */
 	var subscriptions:Array<Subscription> = [];
+
+	/** Core host subscriptions (`onFieldReceived`), cancelled in `dispose`. */
+	var coreSubscriptions:Array<ModSubscription> = [];
 
 	/** Kept as a value, so the very listener that was added is the one removed. */
 	var frameListener:Event->Void;
@@ -63,13 +67,14 @@ class Main extends Mod {
 		state = new FloorState<Floor>();
 		rings = new Circles();
 		frameListener = frame;
-		ctx.keys.action("toggle", "Show or hide", "Shows or hides the proximity trigger rings on the floor.", TOGGLE_KEY).onPress(function() {
+		subscriptions.push(ctx.keys.action("toggle", "Show or hide", "Shows or hides the proximity trigger rings on the floor.", TOGGLE_KEY).onPress(function() {
 			visible = !visible;
 			rings.setVisible(visible);
-		});
+		}));
 		subscriptions.push(ctx.onFloorEnter(enterFloor));
 		subscriptions.push(ctx.onFloorExit(function(_:Floor) leaveFloor()));
 		subscriptions.push(ctx.onTownEnter(leaveFloor));
+		coreSubscriptions.push(ctx.core.onFieldReceived(onFieldReceived));
 	}
 
 	override public function ready(context:Context):Void {
@@ -82,6 +87,9 @@ class Main extends Mod {
 		for (subscription in subscriptions)
 			subscription.cancel();
 		subscriptions = [];
+		for (subscription in coreSubscriptions)
+			subscription.cancel();
+		coreSubscriptions = [];
 	}
 
 	function enterFloor(floor:Floor):Void {
@@ -96,7 +104,18 @@ class Main extends Mod {
 		syncListener();
 	}
 
-	/** The rings leave the world and their graphics are freed. Safe at any time. */
+	/** Rebuilds rings on the next frame when a secret wall reveals new tiles on the active floor. */
+	function onFieldReceived(object:GameObject, _:UInt, name:String):Void {
+		if (name != TILES_FIELD || object == null)
+			return;
+		var floor = state.current;
+		if (floor == null || object.id != floor.id)
+			return;
+		state.refresh();
+		syncListener();
+	}
+
+	/** The rings leave the world and their geometry is freed. Safe at any time. */
 	function removeRings():Void {
 		rings.clear();
 		var layers = sceneGraph();
@@ -152,25 +171,47 @@ class Main extends Mod {
 
 		var tiles:Array<Ring.TileInfo> = [for (tile in floor.tiles) {id: tile.id, x: tile.x, y: tile.y}];
 		var zones = Ring.zonesOf(tiles, cache.objectsByTile, cache.drawable);
-		rings.build(zones);
+		var coreColor = Ring.colorForFloor(cache.theme, floor.map);
+		var starlingFloor = starlingRingLayer();
+
+		layers.removeChild(rings.shape);
+		rings.build(zones, coreColor, starlingFloor);
 		rings.setVisible(visible);
-		layers.addChild(rings.shape, RING_LAYER);
+		if (starlingFloor == null && zones.length > 0)
+			layers.addChild(rings.shape, FALLBACK_RING_LAYER);
+
 		ctx.log("Proximity Circle: " + zones.length + " ring(s) on " + floor.map);
 		return true;
 	}
 
-	/** Reads a library once: its objects by tile, its wires, and the zones that get a ring. */
+	/** Reads a library once: its theme, its objects by tile, its wires, and the zones that get a ring. */
 	static function analyse(json:Dynamic):Analysis {
 		var objectsByTile = new Map<String, Array<Ring.LibraryObject>>();
 		var all:Array<Ring.LibraryObject> = [];
 		for (tile in (json.LETiles : Array<Dynamic>)) {
+			if (tile == null || tile.LEObjects == null)
+				continue;
 			var list:Array<Ring.LibraryObject> = tile.LEObjects;
 			objectsByTile.set(tile.id, list);
 			for (object in list)
 				all.push(object);
 		}
 		var links:Array<Ring.Link> = json.LETriggers == null ? [] : (json.LETriggers : Array<Ring.Link>);
-		return {json: json, objectsByTile: objectsByTile, drawable: Ring.drawable(all, links)};
+		var theme:String = Std.isOfType(json.theme, String) ? (json.theme : String) : "";
+		return {
+			json: json,
+			theme: theme,
+			objectsByTile: objectsByTile,
+			drawable: Ring.drawable(all, links)
+		};
+	}
+
+	function starlingRingLayer():Null<StarlingLayer> {
+		var facade = ctx.core.facade;
+		var manager = facade == null ? null : facade.starlingLayerManager;
+		if (manager == null || !manager.isReady())
+			return null;
+		return @:privateAccess manager.overlayLayer(STARLING_RING_LAYER, "proximityRings", null, false);
 	}
 
 	function sceneGraph():Null<SceneGraphManager> {
