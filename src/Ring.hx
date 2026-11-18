@@ -128,7 +128,7 @@ class Ring {
 		// Who drives whom, counting only wires whose two ends are objects of the library.
 		var driversOf = new Map<String, Array<String>>();
 		for (link in links) {
-			if (link == null || !known.exists(link.triggerId) || !known.exists(link.triggerableId))
+			if (link == null || link.triggerId == null || link.triggerableId == null || !known.exists(link.triggerId) || !known.exists(link.triggerableId))
 				continue;
 			if (!driversOf.exists(link.triggerableId))
 				driversOf.set(link.triggerableId, []);
@@ -147,10 +147,10 @@ class Ring {
 	public static function zonesOf(tiles:Array<TileInfo>, objectsByTile:Map<String, Array<LibraryObject>>, drawable:Map<String, Bool>):Array<Zone> {
 		var out:Array<Zone> = [];
 		for (tile in tiles) {
-			if (tile == null || !objectsByTile.exists(tile.id))
+			if (tile == null || tile.id == null || !objectsByTile.exists(tile.id))
 				continue;
 			for (object in objectsByTile.get(tile.id)) {
-				if (!isZone(object) || !drawable.exists(object.id))
+				if (object == null || object.id == null || !isZone(object) || !drawable.exists(object.id))
 					continue;
 				var r = coord(object.radius);
 				if (r <= 0)

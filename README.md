@@ -1,15 +1,16 @@
 # Proximity Circle
 
-<!-- drh:show -->
-Draws a crisp dashed hazard ring with a deep obsidian contrast casing around each gameplay proximity trigger on the dungeon floor, keeping floor cues inside completely clear.
+![Proximity Circle preview](preview.png)
 
-- Biome-adaptive 2-hue hazard palette (`#FF781F` flame tangerine-red on dark, icy and stone maps; `#FF476C` cerise-crimson on saturated green jungle and bright warm arena sand) over an `#08080E` casing for strong contrast and colour-vision safety across every tileset.
-- Covers both single-hero (`PROXIMITY_TRIGGER`) and party (`PROXIMITY_ALL_HERO`) proximity zones.
-- Ignores bare exploding-barrel fuses (`NPC_SUICIDE_TRIGGER`) and purely cosmetic camera, sound or text triggers without hiding real traps or ambushes.
-- Automatically updates when secret rooms open mid-floor.
-- Rendered natively on Starling's floor layer beneath heroes, monsters, walls, room fades and the HUD, with zero click blocking.
+<!-- drh:show -->
+Shows dashed warning rings on the dungeon floor wherever stepping close sets off a trap, gate, or ambush.
+
+- **Easy-to-spot hazard rings:** Dashed outlines with a dark border stay clear across every dungeon biome without hiding details inside the circle.
+- **Only real threats:** Highlights traps, locked gates, and ambush spawns (for both single-hero and full-party triggers), while skipping cosmetic camera/sound cues and standalone exploding barrels.
+- **Updates as you explore:** Automatically draws new rings when secret rooms open on the floor.
+- **Stays out of your way:** Drawn on the floor underneath heroes, monsters, and menus, and never blocks your mouse clicks.
 
 ## Controls
 
-- Press **R** to show or hide the rings (rebindable under **CONTROLS** in the settings menu).
+- Press **R** to show or hide the rings (you can rebind this key under **CONTROLS** in the settings menu).
 <!-- /drh:show -->

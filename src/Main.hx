@@ -73,7 +73,7 @@ class Main extends Mod {
 		}));
 		subscriptions.push(ctx.onFloorEnter(enterFloor));
 		subscriptions.push(ctx.onFloorExit(function(_:Floor) leaveFloor()));
-		subscriptions.push(ctx.onTownEnter(leaveFloor));
+		subscriptions.push(ctx.onTownEnter(enterTown));
 		coreSubscriptions.push(ctx.core.onFieldReceived(onFieldReceived));
 	}
 
@@ -84,6 +84,7 @@ class Main extends Mod {
 
 	override public function dispose():Void {
 		leaveFloor();
+		analysed = null;
 		for (subscription in subscriptions)
 			subscription.cancel();
 		subscriptions = [];
@@ -103,6 +104,12 @@ class Main extends Mod {
 			state.leave();
 		removeRings();
 		syncListener();
+	}
+
+	function enterTown():Void {
+		leaveFloor();
+		// Release the parsed tile library JSON when the game clears its own tile library cache in town.
+		analysed = null;
 	}
 
 	/** Rebuilds rings on the next frame when a secret wall reveals new tiles on the active floor. */
@@ -149,15 +156,15 @@ class Main extends Mod {
 	}
 
 	/**
-	 * Draws the floor's rings into the world. False while the game's data or the scene graph is not
-	 * there yet.
+	 * Draws the floor's rings into the world. False while the game's data, Starling layer manager,
+	 * or scene graph is not ready yet.
 	 */
 	function build(floor:Floor):Bool {
 		var facade = ctx.core.facade;
 		var gom = facade == null ? null : facade.gameObjectManager;
 		if (gom == null)
 			return false;
-		var game:Null<DistributedDungeonFloor> = cast gom.getReferenceFromId(floor.id);
+		var game = Std.downcast(gom.getReferenceFromId(floor.id), DistributedDungeonFloor);
 		var layers = sceneGraph();
 		if (game == null || game.isDestroyed || layers == null)
 			return false;
@@ -168,6 +175,11 @@ class Main extends Mod {
 		if (json == null || json.LETiles == null)
 			return false;
 
+		var manager = facade.starlingLayerManager;
+		if (manager != null && !manager.isReady())
+			return false;
+		var starlingFloor:Null<StarlingLayer> = manager == null ? null : @:privateAccess manager.overlayLayer(STARLING_RING_LAYER, "proximityRings", null, false);
+
 		var cache = analysed;
 		if (cache == null || cache.json != json) {
 			cache = analyse(json);
@@ -177,7 +189,6 @@ class Main extends Mod {
 		var tiles:Array<Ring.TileInfo> = [for (tile in floor.tiles) {id: tile.id, x: tile.x, y: tile.y}];
 		var zones = Ring.zonesOf(tiles, cache.objectsByTile, cache.drawable);
 		var coreColor = Ring.colorForFloor(cache.theme, floor.map);
-		var starlingFloor = starlingRingLayer();
 
 		layers.removeChild(rings.shape);
 		rings.build(zones, coreColor, starlingFloor);
@@ -194,7 +205,7 @@ class Main extends Mod {
 		var objectsByTile = new Map<String, Array<Ring.LibraryObject>>();
 		var all:Array<Ring.LibraryObject> = [];
 		for (tile in (json.LETiles : Array<Dynamic>)) {
-			if (tile == null || tile.LEObjects == null)
+			if (tile == null || tile.id == null || tile.LEObjects == null)
 				continue;
 			var list:Array<Ring.LibraryObject> = tile.LEObjects;
 			objectsByTile.set(tile.id, list);
@@ -209,14 +220,6 @@ class Main extends Mod {
 			objectsByTile: objectsByTile,
 			drawable: Ring.drawable(all, links)
 		};
-	}
-
-	function starlingRingLayer():Null<StarlingLayer> {
-		var facade = ctx.core.facade;
-		var manager = facade == null ? null : facade.starlingLayerManager;
-		if (manager == null || !manager.isReady())
-			return null;
-		return @:privateAccess manager.overlayLayer(STARLING_RING_LAYER, "proximityRings", null, false);
 	}
 
 	function sceneGraph():Null<SceneGraphManager> {

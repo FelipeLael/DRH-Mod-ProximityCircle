@@ -6,6 +6,7 @@ import openfl.display.Shape;
 import starling.display.MeshBatch;
 import starling.display.Quad;
 import starling.display.Sprite;
+import starling.styles.MeshStyle;
 
 /**
  * The floor's rings, built once in world units with no interior fill.
@@ -30,6 +31,9 @@ class Circles {
 
 	/** Segments per dash's arc: seamless annular quads with shared edges (no gaps, no double-alpha joints). */
 	static inline final STEPS = 4;
+
+	/** Max quads fitting within Starling's 65,535-vertex `MeshBatch` limit (`floor(65535 / 4)`). */
+	static inline final MAX_BATCH_QUADS = 16383;
 
 	public var shape(default, null):Shape;
 
@@ -82,15 +86,19 @@ class Circles {
 	}
 
 	function buildStarling(zones:Array<Ring.Zone>, byRadius:Map<Int, Array<Ring.Dash>>, coreColor:UInt, layer:StarlingLayer):Void {
+		var totalDashes = 0;
+		for (zone in zones)
+			totalDashes += byRadius.get(Math.round(zone.radius)).length;
+		var remainingQuads = totalDashes * 2 * STEPS;
+
 		var root = new Sprite();
 		root.touchable = false;
 		root.visible = isVisible;
 
-		var batch = new MeshBatch();
-		batch.touchable = false;
-		root.addChild(batch);
-
+		var batch = newBatch(remainingQuads);
 		var quad = new Quad(1, 1, HALO_COLOR);
+		quad.setStyle(new MeshStyle(), false);
+		setQuadAlpha(quad, HALO_ALPHA);
 		var capWorld = (HALO_THICKNESS - CORE_THICKNESS) * 0.5;
 
 		// 1. Deep obsidian contrast casing (#08080E) framing radial and angular edges of every dash.
@@ -103,26 +111,51 @@ class Circles {
 				pad = maxPad;
 			var rIn = Math.max(0.0, zone.radius - HALO_THICKNESS * 0.5);
 			var rOut = zone.radius + HALO_THICKNESS * 0.5;
-			for (dash in dashes)
-				batch = emitArc(root, batch, quad, zone.x, zone.y, rIn, rOut, dash.from - pad, dash.to + pad, HALO_ALPHA);
+			for (dash in dashes) {
+				batch = emitArc(root, batch, quad, zone.x, zone.y, rIn, rOut, dash.from - pad, dash.to + pad, remainingQuads);
+				remainingQuads -= STEPS;
+			}
 		}
 
 		// 2. Biome-adaptive hazard core (#FF781F or #FF476C) with high opacity so casing does not muddy it.
 		quad.color = coreColor;
+		setQuadAlpha(quad, CORE_ALPHA);
 		for (zone in zones) {
 			var dashes = byRadius.get(Math.round(zone.radius));
 			var rIn = Math.max(0.0, zone.radius - CORE_THICKNESS * 0.5);
 			var rOut = zone.radius + CORE_THICKNESS * 0.5;
-			for (dash in dashes)
-				batch = emitArc(root, batch, quad, zone.x, zone.y, rIn, rOut, dash.from, dash.to, CORE_ALPHA);
+			for (dash in dashes) {
+				batch = emitArc(root, batch, quad, zone.x, zone.y, rIn, rOut, dash.from, dash.to, remainingQuads);
+				remainingQuads -= STEPS;
+			}
 		}
 
+		if (batch.numVertices > 0)
+			root.addChild(batch);
 		quad.dispose();
 		layer.addChild(root);
 		starlingRoot = root;
 	}
 
-	static function emitArc(root:Sprite, batch:MeshBatch, quad:Quad, cx:Float, cy:Float, rIn:Float, rOut:Float, from:Float, to:Float, alpha:Float):MeshBatch {
+	static function newBatch(remainingQuads:Int):MeshBatch {
+		var batch = new MeshBatch();
+		batch.touchable = false;
+		batch.setStyle(new MeshStyle(), false);
+		var cap = remainingQuads > MAX_BATCH_QUADS ? MAX_BATCH_QUADS : remainingQuads;
+		if (cap > 0) {
+			batch.numVertices = cap * 4;
+			batch.numVertices = 0;
+		}
+		return batch;
+	}
+
+	static inline function setQuadAlpha(quad:Quad, alpha:Float):Void {
+		for (i in 0...4)
+			quad.setVertexAlpha(i, alpha);
+	}
+
+	static function emitArc(root:Sprite, batch:MeshBatch, quad:Quad, cx:Float, cy:Float, rIn:Float, rOut:Float, from:Float, to:Float,
+			remainingQuads:Int):MeshBatch {
 		var span = to - from;
 		var c0 = Math.cos(from);
 		var s0 = Math.sin(from);
@@ -135,11 +168,10 @@ class Circles {
 			quad.setVertexPosition(2, cx + rIn * c0, cy + rIn * s0);
 			quad.setVertexPosition(3, cx + rIn * c1, cy + rIn * s1);
 			if (!batch.canAddMesh(quad, 4)) {
-				batch = new MeshBatch();
-				batch.touchable = false;
 				root.addChild(batch);
+				batch = newBatch(remainingQuads - (step - 1));
 			}
-			batch.addMesh(quad, null, alpha, null, true);
+			batch.addMesh(quad, null, 1.0, null, true);
 			c0 = c1;
 			s0 = s1;
 		}

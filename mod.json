@@ -1,11 +1,13 @@
 {
   "id": "proximity_circle",
   "name": "Proximity Circle",
-  "description": "Draws biome-adaptive dashed warning rings around floor proximity triggers, toggled by a key.",
-  "version": "0.5.1",
+  "description": "Shows dashed warning rings around floor triggers where traps, gates, or ambushes activate. Press R to toggle.",
+  "version": "0.5.2",
   "author": "Astra",
   "api": "1.4",
   "drh": "18",
   "entry": "Main",
-  "uses": ["extends"]
+  "uses": [
+    "extends"
+  ]
 }
