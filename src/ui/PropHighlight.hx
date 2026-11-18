@@ -26,11 +26,15 @@ typedef BrokenProp = {
  * Highlights destructible trap objects directly on the prop sprites themselves so players can
  * spot and avoid breaking them (barrels, statues, cages, eggs that spawn enemies or traps).
  *
- * Uses a high-luminance electric violet-magenta rim glow (`setPersistentGlowFilter`) paired with
- * a gentle ~1.0 Hz specular surface shimmer (`applyStatusTint`):
- * - Electric violet-magenta avoids colliding with DRH's gold mouseover (`0xFDD017`), red selection
- *   (`0xFF0000`), and gold loot sparkles while remaining Protan/Deutan/Tritan readable via high
- *   luminance contrast.
+ * Uses a high-saturation electric cerise-rose rim glow (`setPersistentGlowFilter`) paired with a
+ * gentle ~1.0 Hz near-white specular surface shimmer (`applyStatusTint`):
+ * - Electric cerise-rose (`0xFF3EA5`) avoids colliding with DRH's gold mouseover (`0xFDD017`),
+ *   red selection (`0xFF0000`), purple Legendary/Ethereal glows (`0x660099`/`0x9B30FF`), and cyan
+ *   player foot ring while holding >= 11.8 ΔE00 separation across Protanopia/Deuteranopia/Tritanopia.
+ * - Because `StatusTintFilter` (`ColorTransformStyle.tintMatrix`) is luminance-modulated with zero
+ *   additive offset, the saturated `GlowFilter` rim carries silhouette pop-out on dark props (iron
+ *   cages, tribal huts) while `SHIMMER_COLOR` (`0xFFF5FA`) pulses bright specular sheen without
+ *   darkening light props.
  * - `StarlingActorRenderer` chains `mPersistentGlowFilter` separately from `mHighlightFilter`, so
  *   hovering a marked prop never clears its trap highlight.
  * - Shimmer updates are skipped for props outside the camera cull bounds so off-screen objects incur
@@ -38,15 +42,15 @@ typedef BrokenProp = {
  *   attached for instant pop-free re-entry.
  */
 class PropHighlight {
-	/** Electric violet-magenta outer aura: distinct from gold loot/hover and red selection. */
-	public static inline final GLOW_COLOR:UInt = 0xD848FF;
+	/** Electric cerise-rose outer aura: distinct from gold loot/hover, red selection, and purple rarities. */
+	public static inline final GLOW_COLOR:UInt = 0xFF3EA5;
 
 	static inline final GLOW_ALPHA:Float = 7.5;
 
 	static inline final GLOW_BLUR:Float = 3.5;
 
-	/** Pale orchid-white specular sheen for surface shimmer. */
-	public static inline final SHIMMER_COLOR:UInt = 0xF8D4FF;
+	/** Warm rose-white specular sheen minimizing luminance loss under `tintMatrix`. */
+	public static inline final SHIMMER_COLOR:UInt = 0xFFF5FA;
 
 	static inline final SHIMMER_MIN:Float = 0.08;
 

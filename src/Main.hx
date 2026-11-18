@@ -63,7 +63,7 @@ class Main extends Mod {
 
 	var activeZones:Array<Ring.Zone> = [];
 
-	var activeCoreColor:UInt = Ring.COLOR_FLAME;
+	var activeCoreColor:UInt = Ring.COLOR_ROSE;
 
 	var frameHooked:Bool = false;
 

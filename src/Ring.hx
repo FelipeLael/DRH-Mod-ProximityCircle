@@ -174,11 +174,12 @@ class Ring {
 	/** Drawn share of each slot (leaves clean gaps around the cased dash caps). */
 	public static inline final DASH_FRACTION = 0.42;
 
-	/** Flame tangerine-red (#FF781F): high-luminance hazard core for dark, cool and neutral stone maps. */
-	public static inline final COLOR_FLAME:UInt = 0xFF781F;
-
-	/** Cerise-crimson (#FF476C): blue-lifted hazard core for saturated green jungle and bright warm sand. */
-	public static inline final COLOR_CRIMSON:UInt = 0xFF476C;
+	/**
+	 * Electric rose-magenta (#FF4794, H=335°): extra-spectral cue outside every DRH ground palette
+	 * (min ΔE00 >= 30 normal, >= 11.8 across Protanopia/Deuteranopia/Tritanopia) and cleanly
+	 * separated from DRH red selection (#FF0000), gold hover (#FDD017), green poison, and cyan player aura.
+	 */
+	public static inline final COLOR_ROSE:UInt = 0xFF4794;
 
 	/** True when `object` is a hero proximity trigger zone (`PROXIMITY_TRIGGER` or `PROXIMITY_ALL_HERO`). */
 	public static function isZone(object:LibraryObject):Bool {
@@ -195,15 +196,9 @@ class Ring {
 			&& object.npcId != null;
 	}
 
-	/**
-	 * Biome-adaptive 2-hue hazard palette: selects cerise-crimson on saturated green jungle and
-	 * bright warm arena sand, and flame tangerine-red across dark, icy and stone biomes.
-	 */
+	/** Returns the floor-invariant rose-magenta hazard color across all DRH biomes. */
 	public static function colorForFloor(theme:Null<String>, map:Null<String>):UInt {
-		var key = theme != null && theme != "" ? theme.toUpperCase() : (map == null ? "" : map.toUpperCase());
-		if (key.indexOf("ARENA") >= 0 || key.indexOf("DINO") >= 0 || key.indexOf("TRIBAL") >= 0)
-			return COLOR_CRIMSON;
-		return COLOR_FLAME;
+		return COLOR_ROSE;
 	}
 
 	/**

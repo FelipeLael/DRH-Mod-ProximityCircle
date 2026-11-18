@@ -151,7 +151,7 @@ class TrapHud {
 
 	var lastDanger:Bool = false;
 
-	var activeCoreColor:UInt = Ring.COLOR_FLAME;
+	var activeCoreColor:UInt = Ring.COLOR_ROSE;
 
 	public function new(overlay:Sprite, facade:Null<DBFacade>) {
 		root = new Sprite();
@@ -493,11 +493,10 @@ class TrapHud {
 			var st = alreadyHitSpawned ? ZoneTracker.STATUS_SPAWNED_ALIVE : ZoneTracker.STATUS_ARMED;
 			var inDanger = !alreadyHitSpawned && close;
 			var verb = if (alreadyHitSpawned) "SPAWNED!";
-				else if (damaged && trap.triggerKind == "BREAK") "LOW HP!";
 				else if (close) (trap.triggerKind == "HIT" ? "DON'T HIT!" : "DON'T BREAK!");
 				else Std.int(Math.max(1, d)) + "px";
 
-			var key = "P|" + st + "|" + (damaged ? "D" : "F") + "|" + trap.propName + "|" + trap.summary;
+			var key = "P|" + st + "|" + trap.propName + "|" + trap.summary;
 			var existing = groupMap.get(key);
 			if (existing == null) {
 				var item:ThreatItem = {
@@ -520,7 +519,7 @@ class TrapHud {
 					existing.inDanger = true;
 				if (d < existing.dist)
 					existing.dist = d;
-				if (st == ZoneTracker.STATUS_ARMED && !damaged)
+				if (st == ZoneTracker.STATUS_ARMED)
 					existing.actionVerb = existing.inDanger ? (trap.triggerKind == "HIT" ? "DON'T HIT!" : "DON'T BREAK!") : Std.int(Math.max(1, existing.dist)) + "px";
 			}
 		}
