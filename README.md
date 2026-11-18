@@ -1,6 +1,6 @@
 # Proximity Circle
 
-![Proximity Circle preview](preview.png)
+![Show traps!](preview.png)
 
 <!-- drh:show -->
 Shows dashed warning rings on the dungeon floor wherever stepping close sets off a trap, gate, or ambush.
