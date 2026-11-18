@@ -99,7 +99,8 @@ class Main extends Mod {
 	}
 
 	function leaveFloor():Void {
-		state.leave();
+		if (state != null)
+			state.leave();
 		removeRings();
 		syncListener();
 	}
@@ -117,6 +118,8 @@ class Main extends Mod {
 
 	/** The rings leave the world and their geometry is freed. Safe at any time. */
 	function removeRings():Void {
+		if (rings == null)
+			return;
 		rings.clear();
 		var layers = sceneGraph();
 		if (layers != null)
@@ -125,6 +128,8 @@ class Main extends Mod {
 
 	/** The frame listener runs exactly while the state is waiting for a floor's data. */
 	function syncListener():Void {
+		if (ctx == null || ctx.overlay == null || frameListener == null || state == null)
+			return;
 		if (state.listening)
 			ctx.overlay.addEventListener(Event.ENTER_FRAME, frameListener);
 		else

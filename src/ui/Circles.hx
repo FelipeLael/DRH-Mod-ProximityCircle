@@ -39,7 +39,6 @@ class Circles {
 
 	public function new() {
 		shape = new Shape();
-		shape.mouseEnabled = false;
 	}
 
 	public function setVisible(on:Bool):Void {
@@ -125,17 +124,16 @@ class Circles {
 
 	static function emitArc(root:Sprite, batch:MeshBatch, quad:Quad, cx:Float, cy:Float, rIn:Float, rOut:Float, from:Float, to:Float, alpha:Float):MeshBatch {
 		var span = to - from;
-		var vData = quad.vertexData;
 		var c0 = Math.cos(from);
 		var s0 = Math.sin(from);
 		for (step in 1...STEPS + 1) {
 			var a1 = from + span * step / STEPS;
 			var c1 = Math.cos(a1);
 			var s1 = Math.sin(a1);
-			vData.setPoint(0, "position", cx + rOut * c0, cy + rOut * s0);
-			vData.setPoint(1, "position", cx + rOut * c1, cy + rOut * s1);
-			vData.setPoint(2, "position", cx + rIn * c0, cy + rIn * s0);
-			vData.setPoint(3, "position", cx + rIn * c1, cy + rIn * s1);
+			quad.setVertexPosition(0, cx + rOut * c0, cy + rOut * s0);
+			quad.setVertexPosition(1, cx + rOut * c1, cy + rOut * s1);
+			quad.setVertexPosition(2, cx + rIn * c0, cy + rIn * s0);
+			quad.setVertexPosition(3, cx + rIn * c1, cy + rIn * s1);
 			if (!batch.canAddMesh(quad, 4)) {
 				batch = new MeshBatch();
 				batch.touchable = false;

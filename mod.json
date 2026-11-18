@@ -2,7 +2,7 @@
   "id": "proximity_circle",
   "name": "Proximity Circle",
   "description": "Draws biome-adaptive dashed warning rings around floor proximity triggers, toggled by a key.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "author": "Astra",
   "api": "1.4",
   "drh": "18",
