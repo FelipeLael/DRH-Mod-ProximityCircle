@@ -5,9 +5,10 @@ import distributedObjects.NPCGameObject;
 import mods.proximity_circle.Ring;
 import openfl.Lib;
 
-private typedef TrackedProp = {
+typedef TrackedProp = {
 	var idKey:String;
 	var npc:NPCGameObject;
+	var trap:Ring.PropTrap;
 	var renderer:Null<ActorRenderer>;
 	var phase:Float;
 }
@@ -28,14 +29,14 @@ private typedef TrackedProp = {
  */
 class PropHighlight {
 	/** Electric violet-magenta outer aura: distinct from gold loot/hover and red selection. */
-	static inline final GLOW_COLOR:UInt = 0xD848FF;
+	public static inline final GLOW_COLOR:UInt = 0xD848FF;
 
 	static inline final GLOW_ALPHA:Float = 7.5;
 
 	static inline final GLOW_BLUR:Float = 3.5;
 
 	/** Pale orchid-white specular sheen for surface shimmer. */
-	static inline final SHIMMER_COLOR:UInt = 0xF8D4FF;
+	public static inline final SHIMMER_COLOR:UInt = 0xF8D4FF;
 
 	static inline final SHIMMER_MIN:Float = 0.08;
 
@@ -47,6 +48,8 @@ class PropHighlight {
 	static inline final POS_TOLERANCE:Float = 0.5;
 
 	public var hasActive(get, never):Bool;
+
+	public var entries(get, never):Array<TrackedProp>;
 
 	var trapsByConstant:Map<String, Array<Ring.PropTrap>> = new Map();
 
@@ -60,6 +63,10 @@ class PropHighlight {
 
 	function get_hasActive():Bool {
 		return tracked.length > 0;
+	}
+
+	function get_entries():Array<TrackedProp> {
+		return tracked;
 	}
 
 	/** Replaces the floor's expected prop-trap coordinates and clears any previous floor highlights. */
@@ -93,19 +100,20 @@ class PropHighlight {
 
 		var px = npc.positionX;
 		var py = npc.positionY;
-		var matched = false;
+		var matched:Null<Ring.PropTrap> = null;
 		for (trap in candidates) {
 			if (Math.abs(px - trap.x) < POS_TOLERANCE && Math.abs(py - trap.y) < POS_TOLERANCE) {
-				matched = true;
+				matched = trap;
 				break;
 			}
 		}
-		if (!matched)
+		if (matched == null)
 			return false;
 
 		var entry:TrackedProp = {
 			idKey: key,
 			npc: npc,
+			trap: matched,
 			renderer: rendererOf(npc),
 			phase: ((npc.id : Int) % 64) * 0.27
 		};
@@ -196,7 +204,7 @@ class PropHighlight {
 		return SHIMMER_MIN + (SHIMMER_MAX - SHIMMER_MIN) * wave;
 	}
 
-	static inline function isAliveProp(npc:Null<NPCGameObject>):Bool {
+	public static inline function isAliveProp(npc:Null<NPCGameObject>):Bool {
 		return npc != null && !npc.isDestroyed && !npc.isDead() && npc.hitPoints > 0 && npc.isProp;
 	}
 

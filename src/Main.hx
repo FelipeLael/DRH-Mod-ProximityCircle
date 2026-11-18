@@ -5,6 +5,7 @@ import brain.sceneGraph.SceneGraphManager;
 import brain.starling.StarlingLayer;
 import distributedObjects.DistributedDungeonFloor;
 import distributedObjects.NPCGameObject;
+import gameMasterDictionary.GMNpc;
 import modding.ModSubscription;
 import mods.api.Context;
 import mods.api.Mod;
@@ -12,6 +13,7 @@ import mods.api.Subscription;
 import mods.api.dungeon.Floor;
 import mods.proximity_circle.ui.Circles;
 import mods.proximity_circle.ui.PropHighlight;
+import mods.proximity_circle.ui.TrapHud;
 import openfl.Lib;
 import openfl.events.Event;
 
@@ -20,14 +22,14 @@ typedef Analysis = {
 	var json:Dynamic;
 	var theme:String;
 	var objectsByTile:Map<String, Array<Ring.LibraryObject>>;
-	var drawable:Map<String, Bool>;
-	var drawableProps:Map<String, Bool>;
+	var drawable:Map<String, Ring.Outcome>;
+	var drawableProps:Map<String, Ring.PropEntry>;
 }
 
 /**
- * Marks both floor proximity traps (cased dashed rings on Starling floor layer 12) and destructible
- * trap objects (`NPC_LIFE_TRIGGER` / `NPC_DAMAGE_TRIGGER` props highlighted directly with a glowing
- * violet-magenta rim + shimmering sheen so players avoid destroying them).
+ * Marks floor proximity traps (cased dashed rings on Starling floor layer 12), highlights
+ * destructible trap objects directly on the prop sprites (`PropHighlight`), and displays an
+ * in-game proximity HUD (`TrapHud`) explaining what nearby/active triggers spawn or unleash.
  */
 class Main extends Mod {
 	/** Starling world layer index: above ground (5) and floor decals (10), below sorted actors/walls (20). */
@@ -47,9 +49,19 @@ class Main extends Mod {
 
 	var highlights:PropHighlight;
 
+	var hud:Null<TrapHud> = null;
+
 	var visible:Bool = true;
 
 	var state:FloorState<Floor>;
+
+	var currentGame:Null<DistributedDungeonFloor> = null;
+
+	var activeZones:Array<Ring.Zone> = [];
+
+	var activeCoreColor:UInt = Ring.COLOR_FLAME;
+
+	var frameHooked:Bool = false;
 
 	/** The last tile library read. Keyed by the library's identity: a different library is read again. */
 	var analysed:Null<Analysis> = null;
@@ -69,12 +81,15 @@ class Main extends Mod {
 		rings = new Circles();
 		highlights = new PropHighlight();
 		frameListener = frame;
-		subscriptions.push(ctx.keys.action("toggle", "Show or hide", "Shows or hides proximity rings and trap object highlights.", TOGGLE_KEY).onPress(function() {
-			visible = !visible;
-			rings.setVisible(visible);
-			highlights.setVisible(visible);
-			syncListener();
-		}));
+		subscriptions.push(ctx.keys.action("toggle", "Show or hide", "Shows or hides proximity rings, shiny trap objects, and the proximity HUD.", TOGGLE_KEY)
+			.onPress(function() {
+				visible = !visible;
+				rings.setVisible(visible);
+				highlights.setVisible(visible);
+				if (!visible && hud != null)
+					hud.reset();
+				syncListener();
+			}));
 		subscriptions.push(ctx.onFloorEnter(enterFloor));
 		subscriptions.push(ctx.onFloorExit(function(_:Floor) leaveFloor()));
 		subscriptions.push(ctx.onTownEnter(enterTown));
@@ -86,10 +101,16 @@ class Main extends Mod {
 	override public function ready(context:Context):Void {
 		if (sceneGraph() == null)
 			throw "the game's scene graph is missing (facade.sceneGraphManager): the rings cannot be placed";
+		if (hud == null && ctx.overlay != null)
+			hud = new TrapHud(ctx.overlay, ctx.core.facade);
 	}
 
 	override public function dispose():Void {
 		leaveFloor();
+		if (hud != null) {
+			hud.dispose();
+			hud = null;
+		}
 		analysed = null;
 		for (subscription in subscriptions)
 			subscription.cancel();
@@ -146,8 +167,12 @@ class Main extends Mod {
 		syncListener();
 	}
 
-	/** Removes all floor rings and prop-trap highlights. Safe at any time. */
+	/** Removes all floor rings, prop-trap highlights, and HUD state. Safe at any time. */
 	function removeMarkers():Void {
+		currentGame = null;
+		activeZones = [];
+		if (hud != null)
+			hud.reset();
 		if (highlights != null)
 			highlights.clear();
 		if (rings == null)
@@ -158,11 +183,14 @@ class Main extends Mod {
 			layers.removeChild(rings.shape);
 	}
 
-	/** The frame listener runs while waiting for floor data or while animating visible trap props. */
+	/** The frame listener runs while waiting for floor data or while visible triggers/props exist. */
 	function syncListener():Void {
 		if (ctx == null || ctx.overlay == null || frameListener == null || state == null || highlights == null)
 			return;
-		var needFrame = state.listening || (visible && highlights.hasActive);
+		var needFrame = state.listening || (visible && (highlights.hasActive || activeZones.length > 0));
+		if (needFrame == frameHooked)
+			return;
+		frameHooked = needFrame;
 		if (needFrame)
 			ctx.overlay.addEventListener(Event.ENTER_FRAME, frameListener);
 		else
@@ -178,8 +206,13 @@ class Main extends Mod {
 			case GiveUp(floor):
 				ctx.log("Proximity Circle: the game gave no data for floor " + floor.map + " in time; no rings on it.");
 		}
-		if (visible && highlights != null && highlights.hasActive)
-			highlights.update(Lib.getTimer());
+		if (visible) {
+			var nowMs = Lib.getTimer();
+			if (highlights != null && highlights.hasActive)
+				highlights.update(nowMs);
+			if (hud != null)
+				hud.update(nowMs, ctx.viewWidth, ctx.viewHeight, ctx.core.facade, currentGame, visible, activeCoreColor, activeZones, highlights);
+		}
 		syncListener();
 	}
 
@@ -208,16 +241,21 @@ class Main extends Mod {
 			return false;
 		var starlingFloor:Null<StarlingLayer> = manager == null ? null : @:privateAccess manager.overlayLayer(STARLING_RING_LAYER, "proximityRings", null, false);
 
+		var getNpc = makeNpcLookup(facade.gameMaster);
 		var cache = analysed;
 		if (cache == null || cache.json != json) {
-			cache = analyse(json, facade.gameMaster);
+			cache = analyse(json, getNpc);
 			analysed = cache;
 		}
 
 		var tiles:Array<Ring.TileInfo> = [for (tile in floor.tiles) {id: tile.id, x: tile.x, y: tile.y}];
 		var zones = Ring.zonesOf(tiles, cache.objectsByTile, cache.drawable);
-		var propTraps = Ring.propTrapsOf(tiles, cache.objectsByTile, cache.drawableProps);
+		var propTraps = Ring.propTrapsOf(tiles, cache.objectsByTile, cache.drawableProps, getNpc);
 		var coreColor = Ring.colorForFloor(cache.theme, floor.map);
+
+		currentGame = game;
+		activeZones = zones;
+		activeCoreColor = coreColor;
 
 		layers.removeChild(rings.shape);
 		rings.build(zones, coreColor, starlingFloor);
@@ -239,8 +277,31 @@ class Main extends Mod {
 		return true;
 	}
 
+	static function makeNpcLookup(gameMaster:Dynamic):String->Ring.NpcMeta {
+		var npcByConstant = gameMaster == null ? null : gameMaster.npcByConstant;
+		return function(constant:String):Ring.NpcMeta {
+			var npc:Null<GMNpc> = npcByConstant == null ? null : Std.downcast(npcByConstant.itemFor(constant), GMNpc);
+			if (npc == null) {
+				return {
+					isProp: false,
+					name: "",
+					isBoss: constant.indexOf("BOSS") >= 0 || constant.indexOf("JUGGERNAUT") >= 0,
+					isExploding: constant.indexOf("EXPLODING_BARREL") >= 0
+				};
+			}
+			var isBoss = npc.IsBoss || npc.HasHealthbar || constant.indexOf("BOSS") >= 0 || constant.indexOf("MINIBOSS") >= 0;
+			var isExploding = constant.indexOf("EXPLODING_BARREL") >= 0;
+			return {
+				isProp: npc.CharType == "PROP",
+				name: npc.Name == null ? "" : npc.Name,
+				isBoss: isBoss,
+				isExploding: isExploding
+			};
+		};
+	}
+
 	/** Reads a library once: its theme, its objects by tile, its wires, and the zones/prop traps to mark. */
-	static function analyse(json:Dynamic, gameMaster:Dynamic):Analysis {
+	static function analyse(json:Dynamic, getNpc:String->Ring.NpcMeta):Analysis {
 		var objectsByTile = new Map<String, Array<Ring.LibraryObject>>();
 		var all:Array<Ring.LibraryObject> = [];
 		for (tile in (json.LETiles : Array<Dynamic>)) {
@@ -253,14 +314,7 @@ class Main extends Mod {
 		}
 		var links:Array<Ring.Link> = json.LETriggers == null ? [] : (json.LETriggers : Array<Ring.Link>);
 		var theme:String = Std.isOfType(json.theme, String) ? (json.theme : String) : "";
-		var npcByConstant = gameMaster == null ? null : gameMaster.npcByConstant;
-		var isProp = function(constant:String):Bool {
-			if (npcByConstant == null)
-				return false;
-			var npc:Dynamic = npcByConstant.itemFor(constant);
-			return npc != null && npc.CharType == "PROP";
-		};
-		var set = Ring.drawableSet(all, links, isProp);
+		var set = Ring.drawableSet(all, links, getNpc);
 		return {
 			json: json,
 			theme: theme,
