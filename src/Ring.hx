@@ -37,7 +37,7 @@ typedef Dash = {
 }
 
 /**
- * The zones' rule and arithmetic, free of the game so the tests can run without it.
+ * The zones' rule and arithmetic, free of the game.
  *
  * In the game's data a zone is a `LETrigger` object with the constant `PROXIMITY_TRIGGER`, inside a
  * tile of the library. Its centre is the tile's top-left corner plus the object's `x` and `y`, and
@@ -62,10 +62,13 @@ class Ring {
 
 	static inline final ASYM_AUTO_TIMER = "ASYM_AUTO_TIMER_TRIGGER";
 
-	/** Dashes per circle, and the share of each dash's slot that is drawn. */
-	public static inline final DASHES = 36;
+	/** Target arc pitch (dash + gap) in world units so small and large rings share the same rhythm. */
+	public static inline final DASH_PITCH = 18.0;
 
-	public static inline final DASH_FRACTION = 0.5;
+	public static inline final MIN_DASHES = 8;
+
+	/** Drawn share of each slot (leaves clean gaps even with round line caps). */
+	public static inline final DASH_FRACTION = 0.42;
 
 	/**
 	 * The ids of the zones to draw, as keys: a zone that does something, and does not feed a suicide
@@ -119,11 +122,13 @@ class Ring {
 		return out;
 	}
 
-	/** The dashes of a circle: `DASHES` of them, evenly spaced, each `DASH_FRACTION` of its slot. */
-	public static function dashes():Array<Dash> {
-		var slot = 2 * Math.PI / DASHES;
+	/** The dashes for a ring of `radius`: uniform world-space pitch, at least `MIN_DASHES`. */
+	public static function dashesForRadius(radius:Float):Array<Dash> {
+		var raw = Math.round(2 * Math.PI * radius / DASH_PITCH);
+		var count = raw < MIN_DASHES ? MIN_DASHES : raw;
+		var slot = 2 * Math.PI / count;
 		var out:Array<Dash> = [];
-		for (i in 0...DASHES) {
+		for (i in 0...count) {
 			var from = i * slot;
 			out.push({from: from, to: from + slot * DASH_FRACTION});
 		}

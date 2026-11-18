@@ -10,20 +10,20 @@ import openfl.display.Shape;
  * floor and every popup and menu draws above it. Nothing is redrawn per frame.
  */
 class Circles {
-	/** Okabe-Ito blue (#0072B2) for color-blind safety and high visibility. */
-	static inline final COLOR:UInt = 0x0072B2;
+	/** Vivid coral-vermilion (#FF5238): clear hazard telegraph, high luminance on dark floors, CVD-safe. */
+	static inline final COLOR:UInt = 0xFF5238;
 
-	static inline final ALPHA:Float = 0.95;
+	static inline final ALPHA:Float = 0.78;
 
-	/** In world units, so the line scales with the camera like the floor does. */
-	static inline final THICKNESS:Float = 4;
+	/** Thin world-unit stroke so floor cues and characters underneath stay readable. */
+	static inline final THICKNESS:Float = 3.0;
 
-	/** Dark halo (#000000) drawn underneath for high contrast across all dungeon floor textures. */
+	/** Translucent dark halo underneath for dual-contrast separation on bright or fiery floors. */
 	static inline final HALO_COLOR:UInt = 0x000000;
 
-	static inline final HALO_ALPHA:Float = 0.8;
+	static inline final HALO_ALPHA:Float = 0.48;
 
-	static inline final HALO_THICKNESS:Float = 7;
+	static inline final HALO_THICKNESS:Float = 5.5;
 
 	/** Segments per dash's arc: enough to look round at any zoom. */
 	static inline final STEPS = 4;
@@ -46,11 +46,19 @@ class Circles {
 	public function build(zones:Array<Ring.Zone>):Void {
 		var g = shape.graphics;
 		g.clear();
-		var dashes = Ring.dashes();
 
-		// 1. Thin dark halo underneath for contrast and color-blind safety
+		// Cache dash angles by radius so zones of the same size reuse their arc layout
+		var byRadius = new Map<Int, Array<Ring.Dash>>();
+		for (zone in zones) {
+			var key = Math.round(zone.radius);
+			if (!byRadius.exists(key))
+				byRadius.set(key, Ring.dashesForRadius(zone.radius));
+		}
+
+		// 1. Thin translucent dark halo underneath for contrast across light and fiery tiles
 		g.lineStyle(HALO_THICKNESS, HALO_COLOR, HALO_ALPHA);
 		for (zone in zones) {
+			var dashes = byRadius.get(Math.round(zone.radius));
 			for (dash in dashes) {
 				var span = dash.to - dash.from;
 				for (s in 0...STEPS + 1) {
@@ -65,9 +73,10 @@ class Circles {
 			}
 		}
 
-		// 2. Main dashed ring in Okabe-Ito blue (#0072B2)
+		// 2. Main dashed hazard ring in luminous coral-vermilion (#FF5238)
 		g.lineStyle(THICKNESS, COLOR, ALPHA);
 		for (zone in zones) {
+			var dashes = byRadius.get(Math.round(zone.radius));
 			for (dash in dashes) {
 				var span = dash.to - dash.from;
 				for (s in 0...STEPS + 1) {
