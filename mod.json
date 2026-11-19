@@ -2,7 +2,7 @@
   "id": "proximity_circle",
   "name": "Proximity Circle",
   "description": "Marks floor traps, destructible trap objects, and live trigger states in a DRH-styled HUD. Press R to toggle.",
-  "version": "0.9.0",
+  "version": "1.0.0",
   "author": "Astra",
   "api": "1.4",
   "drh": "18",

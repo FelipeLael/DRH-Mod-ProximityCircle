@@ -179,19 +179,29 @@ class Ring {
 	static inline final TIMELINE_TRIGGERABLE = "TIMELINE_TRIGGERABLE";
 
 	/** Target arc pitch (dash + gap) in world units so small and large rings share the same rhythm. */
-	public static inline final DASH_PITCH = 24.0;
+	public static inline final DASH_PITCH = 22.0;
 
 	public static inline final MIN_DASHES = 8;
 
-	/** Drawn share of each slot (leaves clean gaps around the cased pill dash caps). */
+	/** Drawn share of each slot (leaves clean etched gaps around the dual-polarity dashes). */
 	public static inline final DASH_FRACTION = 0.48;
 
 	/**
-	 * Electric rose-magenta (#FF4794, H=335°): extra-spectral cue outside every DRH ground palette
-	 * (min ΔE00 >= 30 normal, >= 11.8 across Protanopia/Deuteranopia/Tritanopia) and cleanly
-	 * separated from DRH red selection (#FF0000), gold hover (#FDD017), green poison, and cyan player aura.
+	 * Restrained dungeon-mineral floor palette (Tufte Smallest Effective Difference + Ware Large
+	 * Area Rule): low-saturation earth/mineral cores (30-56% HSV sat) paired with a warm charcoal
+	 * under-stroke (#14110F) and distinct per-tier geometry for 9-biome & grayscale CVD legibility.
 	 */
-	public static inline final COLOR_ROSE:UInt = 0xFF4794;
+	public static inline final COLOR_TRAP:UInt = 0xC26B54; // Aged Terracotta
+
+	public static inline final COLOR_AMBUSH:UInt = 0xC99A4E; // Tarnished Brass
+
+	public static inline final COLOR_BOSS:UInt = 0xA34E68; // Muted Plum-Burgundy
+
+	public static inline final COLOR_GATE:UInt = 0x6E9E9A; // Weathered Verdigris
+
+	public static inline final COLOR_ACTIVE:UInt = 0xD96248; // Ember Vermilion (focal pop-out)
+
+	public static inline final COLOR_CLEARED:UInt = 0x8C877E; // Stone Ash
 
 	/** True when `object` is a hero proximity trigger zone (`PROXIMITY_TRIGGER` or `PROXIMITY_ALL_HERO`). */
 	public static function isZone(object:LibraryObject):Bool {
@@ -208,46 +218,58 @@ class Ring {
 			&& object.npcId != null;
 	}
 
-	/** Returns the floor-invariant rose-magenta hazard color across all DRH biomes. */
+	/** Returns the default restrained mineral trap color (per-tier colors live in `tierColor`). */
 	public static function colorForFloor(theme:Null<String>, map:Null<String>):UInt {
-		return COLOR_ROSE;
+		return COLOR_TRAP;
+	}
+
+	/** Restrained mineral pigment by threat tier (each tier also has unique CVD-safe geometry). */
+	public static function tierColor(severity:Int):UInt {
+		if (severity >= SEVERITY_BOSS)
+			return COLOR_BOSS;
+		if (severity >= SEVERITY_AMBUSH)
+			return COLOR_AMBUSH;
+		if (severity >= SEVERITY_TRAP)
+			return COLOR_TRAP;
+		return COLOR_GATE;
 	}
 
 	/**
-	 * Pre-attentive geometric profile by threat tier (stroke weight, dash duty, inward rim wash,
-	 * and inward perimeter teeth) so tiers separate under all CVD profiles with zero center clutter.
+	 * Pre-attentive geometric profile by threat tier (stroke weight, dash duty, and inward accents).
+	 * Idle interior wash is 0 across all tiers (Ware's Large Area Rule); subtle wash appears only
+	 * when active/firing or stepped on.
 	 */
 	public static function tierProfile(zone:Zone):TierProfile {
 		if (zone.severity >= SEVERITY_BOSS) {
 			return {
-				pitch: 28.0,
-				fraction: 0.58,
-				coreW: 4.6,
-				inkW: 9.4,
-				washW: 14.0,
-				teethCount: 8,
-				teethDepth: 11.0,
+				pitch: 24.0,
+				fraction: 0.72,
+				coreW: 2.6,
+				inkW: 5.4,
+				washW: 12.0,
+				teethCount: 4,
+				teethDepth: 9.0,
 				isUtility: false
 			};
 		}
 		if (zone.severity >= SEVERITY_AMBUSH) {
 			return {
 				pitch: 26.0,
-				fraction: 0.54,
-				coreW: 4.0,
-				inkW: 8.4,
-				washW: 11.0,
+				fraction: 0.58,
+				coreW: 2.2,
+				inkW: 4.8,
+				washW: 10.0,
 				teethCount: 4,
-				teethDepth: 8.0,
+				teethDepth: 7.5,
 				isUtility: false
 			};
 		}
 		if (zone.severity >= SEVERITY_TRAP) {
 			return {
-				pitch: 24.0,
-				fraction: 0.48,
-				coreW: 3.4,
-				inkW: 7.6,
+				pitch: 20.0,
+				fraction: 0.50,
+				coreW: 2.0,
+				inkW: 4.4,
 				washW: 9.0,
 				teethCount: 0,
 				teethDepth: 0.0,
@@ -255,10 +277,10 @@ class Ring {
 			};
 		}
 		return {
-			pitch: 22.0,
-			fraction: 0.30,
-			coreW: 2.6,
-			inkW: 6.2,
+			pitch: 14.0,
+			fraction: 0.28,
+			coreW: 1.7,
+			inkW: 3.9,
 			washW: 0.0,
 			teethCount: 0,
 			teethDepth: 0.0,

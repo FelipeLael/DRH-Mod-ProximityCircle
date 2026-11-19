@@ -63,7 +63,7 @@ class Main extends Mod {
 
 	var activeZones:Array<Ring.Zone> = [];
 
-	var activeCoreColor:UInt = Ring.COLOR_ROSE;
+	var activeCoreColor:UInt = Ring.COLOR_TRAP;
 
 	var frameHooked:Bool = false;
 
@@ -238,7 +238,7 @@ class Main extends Mod {
 			if (rings != null && tracker != null)
 				rings.syncStates(nowMs, tracker);
 			if (highlights != null && highlights.hasActive)
-				highlights.update(nowMs, facade == null ? null : facade.camera);
+				highlights.update(nowMs, facade == null ? null : facade.camera, currentGame);
 			if (hud != null && tracker != null)
 				hud.update(nowMs, ctx.viewWidth, ctx.viewHeight, facade, currentGame, visible, activeCoreColor, tracker, highlights);
 		}
@@ -294,7 +294,8 @@ class Main extends Mod {
 			layers.addChild(rings.shape, FALLBACK_RING_LAYER);
 
 		tracker.reset(zones);
-		highlights.setFloorTraps(propTraps, visible);
+		var starlingOverlay:Null<StarlingLayer> = manager == null ? null : manager.starlingOverlayLayer;
+		highlights.setFloorTraps(propTraps, visible, starlingFloor, starlingOverlay);
 		var actors = game.remoteActors;
 		if (actors != null) {
 			for (key in actors.keysToArray()) {

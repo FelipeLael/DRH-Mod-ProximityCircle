@@ -17,6 +17,7 @@ private typedef VertexRange = {
 
 private typedef ZoneSlice = {
 	var zone:Ring.Zone;
+	var severity:Int;
 	var isUtility:Bool;
 	var isBoss:Bool;
 	var wash:Null<VertexRange>;
@@ -27,69 +28,58 @@ private typedef ZoneSlice = {
 }
 
 /**
- * The floor's proximity trigger rings, built once in world units with no center fill.
+ * The floor's proximity trigger rings, rendered as restrained etched-mineral dungeon markings.
  *
- * Uses DRH's warm espresso comic ink (`0x120A04`), tapered hand-inked pill dashes, 2-tone cel
- * shading (`0xFF7EB8` crest -> `0xE62E7A` outer edge), feathered inward rim wash, redundant
- * threat-tier geometry (Boss crown teeth, Ambush cardinal teeth, All-Hero inner companion dots),
- * and live floor state demotion/pulsing synchronized with `ZoneTracker` at 0 steady-state VBO uploads.
+ * Visual & affordance design (Tufte Smallest Effective Difference + Ware Large Area Rule):
+ * - Warm charcoal dual-polarity under-stroke (`0x14110F`, `α = 0.40-0.50`) paired with muted
+ *   mineral pigment cores (Aged Terracotta Trap, Tarnished Brass Ambush, Muted Plum-Burgundy
+ *   Boss double-ring seal, Weathered Verdigris Gate dots) and **zero idle interior fill**.
+ * - Every tier is uniquely identifiable in grayscale / CVD via stroke weight & geometry
+ *   (stippled dots, dashes, long-dash + cardinal ticks, Boss double-ring + gold cardinal pips,
+ *   and staggered inner dots for `PROXIMITY_ALL_HERO`).
+ * - Focal saturation & subtle radial wash (`α = 0.09 -> 0`) appear *only* when a ring is
+ *   stepped on or actively firing; cleared one-shot rings fade into faint Stone Ash (`α = 0.24`).
  */
 class Circles {
-	/** Warm espresso comic ink matching DRH props, trees, pickups, and `TrapHud.COL_INK`. */
-	static inline final INK_COLOR:UInt = 0x120A04;
+	/** Warm charcoal under-stroke (never pure black): guarantees contrast on snow, sand, and ice. */
+	static inline final INK_COLOR:UInt = 0x14110F;
 
-	static inline final INK_ALPHA_ARMED:Float = 0.88;
+	static inline final INK_ALPHA_UTIL:Float = 0.40;
 
-	static inline final INK_ALPHA_ACTIVE:Float = 0.94;
+	static inline final INK_ALPHA_ARMED:Float = 0.46;
 
-	static inline final INK_ALPHA_CLEARED:Float = 0.22;
+	static inline final INK_ALPHA_BOSS:Float = 0.50;
 
-	/** Armed 2-tone rose-magenta cel pair (mean hue #FF4794, H=335 deg). */
-	static inline final CORE_ARMED_IN:UInt = 0xFF7EB8;
+	static inline final INK_ALPHA_ACTIVE:Float = 0.58;
 
-	static inline final CORE_ARMED_OUT:UInt = 0xE62E7A;
+	static inline final INK_ALPHA_CLEARED:Float = 0.18;
 
-	static inline final CORE_UTIL_IN:UInt = 0xFFC0DC;
+	/** Restrained mineral pigment cores by tier & state. */
+	static inline final BOSS_ACCENT_COLOR:UInt = 0xD4A94A; // Tarnished gold cardinal pips
 
-	static inline final CORE_UTIL_OUT:UInt = 0xE57AA8;
+	static inline final CORE_INSIDE:UInt = 0xDF8556; // Warm terracotta-amber lift on step-in
 
-	/** Stepping-inside brightened rose pair. */
-	static inline final CORE_INSIDE_IN:UInt = 0xFFB8D9;
+	static inline final CORE_ACTIVE:UInt = Ring.COLOR_ACTIVE; // Ember Vermilion (#D96248)
 
-	static inline final CORE_INSIDE_OUT:UInt = 0xFF4794;
+	static inline final CORE_CLEARED:UInt = Ring.COLOR_CLEARED; // Stone Ash (#8C877E)
 
-	/** Active / spawned / firing molten gold-coral pair (+0.43 luminance jump, CVD-safe). */
-	static inline final CORE_SPAWN_IN:UInt = 0xFFE066;
+	/** Subtle active floor halo colors & calm pulse speeds (only visible when stepped on / firing). */
+	static inline final GLOW_INSIDE_COLOR:UInt = 0xDF8556;
 
-	static inline final CORE_SPAWN_OUT:UInt = 0xFF4D2E;
+	static inline final GLOW_ACTIVE_COLOR:UInt = 0xD96248;
 
-	/** Cleared / triggered "spent chalk trace" warm stone-bronze pair. */
-	static inline final CORE_CLEAR_IN:UInt = 0xB39B82;
+	static inline final PULSE_INSIDE_RAD:Float = 0.0094248; // 1.5 Hz
 
-	static inline final CORE_CLEAR_OUT:UInt = 0x8C735B;
-
-	/** Threat-tier inward tooth fills. */
-	static inline final BOSS_TEETH_COLOR:UInt = 0xFFD24C;
-
-	static inline final SPAWN_TEETH_COLOR:UInt = 0xFFE680;
-
-	/** Active floor halo colors & pulse speeds. */
-	static inline final GLOW_INSIDE_COLOR:UInt = 0xFFC4DF;
-
-	static inline final GLOW_SPAWN_COLOR:UInt = 0xFFCC33;
-
-	static inline final PULSE_INSIDE_RAD:Float = 0.0113097; // 1.8 Hz
-
-	static inline final PULSE_SPAWN_RAD:Float = 0.0087965; // 1.4 Hz
+	static inline final PULSE_ACTIVE_RAD:Float = 0.0075398; // 1.2 Hz
 
 	static inline final STEPS = 4;
 
 	static inline final MAX_BATCH_QUADS = 16383;
 
-	/** 5-station capsule taper along each 4-quad dash: flowing comic pills at zero extra vertices. */
+	/** Soft capsule taper along each 4-quad dash: etched brush/chalk rhythm at zero extra vertices. */
 	static final CAP_T:Array<Float> = [0.0, 0.16, 0.50, 0.84, 1.0];
 
-	static final CAP_W:Array<Float> = [0.42, 1.0, 1.0, 1.0, 0.42];
+	static final CAP_W:Array<Float> = [0.46, 1.0, 1.0, 1.0, 0.46];
 
 	public var shape(default, null):Shape;
 
@@ -101,11 +91,9 @@ class Circles {
 
 	var openflZones:Array<Ring.Zone> = [];
 
-	var activeCoreColor:UInt = Ring.COLOR_ROSE;
-
 	var lastRevision:Int = -1;
 
-	var activePulseRad:Float = PULSE_SPAWN_RAD;
+	var activePulseRad:Float = PULSE_ACTIVE_RAD;
 
 	var isVisible:Bool = true;
 
@@ -135,10 +123,9 @@ class Circles {
 		}
 	}
 
-	/** Builds every zone's comic-inked ring in world units on `starlingLayer` (preferred) or `shape`. */
-	public function build(zones:Array<Ring.Zone>, coreColor:UInt, starlingLayer:Null<StarlingLayer>):Void {
+	/** Builds every zone's etched-mineral ring in world units on `starlingLayer` or OpenFL `shape`. */
+	public function build(zones:Array<Ring.Zone>, _:UInt, starlingLayer:Null<StarlingLayer>):Void {
 		clear();
-		activeCoreColor = coreColor;
 		if (zones.length == 0)
 			return;
 
@@ -155,8 +142,8 @@ class Circles {
 	}
 
 	/**
-	 * Synchronizes live floor ring visuals with `ZoneTracker` (`STATUS_ARMED`, `heroInsideNow`,
-	 * `STATUS_SPAWNED_ALIVE`, `STATUS_TRIGGERED`). Returns in O(1) on steady idle frames.
+	 * Synchronizes live floor ring states with `ZoneTracker`. Idle rings stay crisp with zero fill;
+	 * stepped-on and firing rings gain focal ember contrast; cleared rings fade into Stone Ash.
 	 */
 	public function syncStates(nowMs:Int, tracker:Null<ZoneTracker>):Void {
 		if (tracker == null || !isVisible)
@@ -170,7 +157,7 @@ class Circles {
 			}
 			if (activeGlowBatch != null && activeGlowBatch.visible) {
 				var wave = 0.5 + 0.5 * Math.sin(nowMs * activePulseRad);
-				activeGlowBatch.alpha = 0.35 + 0.65 * wave;
+				activeGlowBatch.alpha = 0.40 + 0.60 * wave;
 			}
 			return;
 		}
@@ -209,6 +196,7 @@ class Circles {
 		slices = [
 			for (i in 0...zones.length) {
 				zone: zones[i],
+				severity: zones[i].severity,
 				isUtility: profiles[i].isUtility,
 				isBoss: zones[i].severity >= Ring.SEVERITY_BOSS,
 				wash: null,
@@ -219,7 +207,7 @@ class Circles {
 			}
 		];
 
-		// Pass 1: Soft feathered inward rim wash (grounding + Gestalt inside/outside polarity)
+		// Pass 1: Inward radial wash slots — 0.00 alpha at idle (Ware Large Area Rule), revealed only on active/inside!
 		for (i in 0...zones.length) {
 			var z = zones[i];
 			var p = profiles[i];
@@ -228,13 +216,13 @@ class Circles {
 			var segs = dashSets[i].length;
 			batch = ensureCapacity(root, batch, quad, segs, remainingQuads);
 			var startV = batch.numVertices;
-			setQuadSplit(quad, Ring.COLOR_ROSE, 0.14, Ring.COLOR_ROSE, 0.0);
+			setQuadSplit(quad, CORE_ACTIVE, 0.0, CORE_ACTIVE, 0.0);
 			emitStrip(batch, quad, z.x, z.y, Math.max(0.0, z.radius - p.washW), z.radius, segs);
 			remainingQuads -= segs;
 			slices[i].wash = {batch: batch, startVert: startV, numVerts: batch.numVertices - startV};
 		}
 
-		// Pass 2: Warm espresso comic ink casing (outer pills + All-Hero inner dots + tier teeth casings)
+		// Pass 2: Warm charcoal dual-polarity under-stroke (#14110F)
 		for (i in 0...zones.length) {
 			var z = zones[i];
 			var p = profiles[i];
@@ -243,27 +231,31 @@ class Circles {
 			var passQuads = dashes.length * STEPS + compCount * 2 + p.teethCount;
 			batch = ensureCapacity(root, batch, quad, passQuads, remainingQuads);
 			var startV = batch.numVertices;
-			setQuadFlat(quad, INK_COLOR, INK_ALPHA_ARMED);
+			setQuadFlat(quad, INK_COLOR, armedInkAlpha(slices[i]));
 
 			var slot = 2 * Math.PI / dashes.length;
-			var maxPad = slot * (1.0 - p.fraction) * 0.38;
+			var maxPad = slot * (1.0 - p.fraction) * 0.36;
 			var pad = ((p.inkW - p.coreW) * 0.5) / z.radius;
 			if (pad > maxPad)
 				pad = maxPad;
 			for (d in dashes)
 				emitTaperedArc(batch, quad, z.x, z.y, z.radius, p.inkW, d.from - pad, d.to + pad);
 
-			if (compCount > 0)
-				emitCompanionDots(batch, quad, z, dashes.length, compCount, 4.6, 0.16);
+			if (compCount > 0) {
+				var innerThick = slices[i].isBoss ? 3.2 : 3.6;
+				var innerDuty = slices[i].isBoss ? 0.42 : 0.16;
+				var inset = slices[i].isBoss ? 5.0 : (z.radius < 48.0 ? 5.5 : 7.5);
+				emitCompanionDots(batch, quad, z, dashes.length, compCount, innerThick, innerDuty, inset);
+			}
 
 			if (p.teethCount > 0)
-				emitTeeth(batch, quad, z, p.coreW, p.teethCount, p.teethDepth + 2.2, true);
+				emitTeeth(batch, quad, z, p.coreW, p.teethCount, p.teethDepth + 1.8, true);
 
 			remainingQuads -= passQuads;
 			slices[i].casing = {batch: batch, startVert: startV, numVerts: batch.numVertices - startV};
 		}
 
-		// Pass 3: 2-tone cel-shaded core pills + All-Hero companion dot cores
+		// Pass 3: Restrained mineral pigment cores
 		for (i in 0...zones.length) {
 			var z = zones[i];
 			var p = profiles[i];
@@ -272,22 +264,23 @@ class Circles {
 			var passQuads = dashes.length * STEPS + compCount * 2;
 			batch = ensureCapacity(root, batch, quad, passQuads, remainingQuads);
 			var startV = batch.numVertices;
-			if (p.isUtility)
-				setQuadSplit(quad, CORE_UTIL_OUT, 0.82, CORE_UTIL_IN, 0.82);
-			else
-				setQuadSplit(quad, CORE_ARMED_OUT, 0.95, CORE_ARMED_IN, 0.95);
+			setQuadFlat(quad, Ring.tierColor(z.severity), armedCoreAlpha(slices[i]));
 
 			for (d in dashes)
 				emitTaperedArc(batch, quad, z.x, z.y, z.radius, p.coreW, d.from, d.to);
 
-			if (compCount > 0)
-				emitCompanionDots(batch, quad, z, dashes.length, compCount, 1.8, 0.11);
+			if (compCount > 0) {
+				var innerThick = slices[i].isBoss ? 1.2 : 1.5;
+				var innerDuty = slices[i].isBoss ? 0.36 : 0.11;
+				var inset = slices[i].isBoss ? 5.0 : (z.radius < 48.0 ? 5.5 : 7.5);
+				emitCompanionDots(batch, quad, z, dashes.length, compCount, innerThick, innerDuty, inset);
+			}
 
 			remainingQuads -= passQuads;
 			slices[i].core = {batch: batch, startVert: startV, numVerts: batch.numVertices - startV};
 		}
 
-		// Pass 4: Inward perimeter teeth fills (Boss gold crown / Ambush luminous rose)
+		// Pass 4: Subtle cardinal inward ticks (Boss tarnished gold / Ambush tarnished brass)
 		for (i in 0...zones.length) {
 			var z = zones[i];
 			var p = profiles[i];
@@ -295,7 +288,7 @@ class Circles {
 				continue;
 			batch = ensureCapacity(root, batch, quad, p.teethCount, remainingQuads);
 			var startV = batch.numVertices;
-			setQuadFlat(quad, slices[i].isBoss ? BOSS_TEETH_COLOR : CORE_ARMED_IN, 0.96);
+			setQuadFlat(quad, slices[i].isBoss ? BOSS_ACCENT_COLOR : Ring.COLOR_AMBUSH, slices[i].isBoss ? 0.82 : 0.72);
 			emitTeeth(batch, quad, z, p.coreW, p.teethCount, p.teethDepth, false);
 			remainingQuads -= p.teethCount;
 			slices[i].accents = {batch: batch, startVert: startV, numVerts: batch.numVertices - startV};
@@ -330,35 +323,32 @@ class Circles {
 
 			if (st == ZoneTracker.STATUS_TRIGGERED) {
 				colorizeFlat(s.casing, INK_COLOR, INK_ALPHA_CLEARED);
-				colorizeSplit(s.core, CORE_CLEAR_OUT, 0.28, CORE_CLEAR_IN, 0.28);
+				colorizeFlat(s.core, CORE_CLEARED, 0.24);
 				if (s.wash != null)
-					colorizeSplit(s.wash, CORE_CLEAR_OUT, 0.0, CORE_CLEAR_OUT, 0.0);
+					colorizeSplit(s.wash, CORE_CLEARED, 0.0, CORE_CLEARED, 0.0);
 				if (s.accents != null)
-					colorizeFlat(s.accents, CORE_CLEAR_OUT, 0.0);
+					colorizeFlat(s.accents, CORE_CLEARED, 0.0);
 			} else if (st == ZoneTracker.STATUS_SPAWNED_ALIVE) {
 				colorizeFlat(s.casing, INK_COLOR, INK_ALPHA_ACTIVE);
-				colorizeSplit(s.core, CORE_SPAWN_OUT, 1.0, CORE_SPAWN_IN, 1.0);
+				colorizeFlat(s.core, CORE_ACTIVE, 0.90);
 				if (s.wash != null)
-					colorizeSplit(s.wash, 0xFFAA22, 0.22, 0xFFAA22, 0.0);
+					colorizeSplit(s.wash, CORE_ACTIVE, 0.10, CORE_ACTIVE, 0.0);
 				if (s.accents != null)
-					colorizeFlat(s.accents, SPAWN_TEETH_COLOR, 1.0);
+					colorizeFlat(s.accents, BOSS_ACCENT_COLOR, 0.92);
 			} else if (inside) {
 				colorizeFlat(s.casing, INK_COLOR, INK_ALPHA_ACTIVE);
-				colorizeSplit(s.core, CORE_INSIDE_OUT, 1.0, CORE_INSIDE_IN, 1.0);
+				colorizeFlat(s.core, CORE_INSIDE, 0.88);
 				if (s.wash != null)
-					colorizeSplit(s.wash, CORE_ARMED_IN, 0.24, CORE_ARMED_IN, 0.0);
+					colorizeSplit(s.wash, CORE_INSIDE, 0.09, CORE_INSIDE, 0.0);
 				if (s.accents != null)
-					colorizeFlat(s.accents, s.isBoss ? BOSS_TEETH_COLOR : CORE_INSIDE_IN, 1.0);
+					colorizeFlat(s.accents, s.isBoss ? BOSS_ACCENT_COLOR : CORE_INSIDE, 0.90);
 			} else {
-				colorizeFlat(s.casing, INK_COLOR, INK_ALPHA_ARMED);
-				if (s.isUtility)
-					colorizeSplit(s.core, CORE_UTIL_OUT, 0.82, CORE_UTIL_IN, 0.82);
-				else
-					colorizeSplit(s.core, CORE_ARMED_OUT, 0.95, CORE_ARMED_IN, 0.95);
+				colorizeFlat(s.casing, INK_COLOR, armedInkAlpha(s));
+				colorizeFlat(s.core, Ring.tierColor(s.severity), armedCoreAlpha(s));
 				if (s.wash != null)
-					colorizeSplit(s.wash, Ring.COLOR_ROSE, 0.14, Ring.COLOR_ROSE, 0.0);
+					colorizeSplit(s.wash, CORE_ACTIVE, 0.0, CORE_ACTIVE, 0.0);
 				if (s.accents != null)
-					colorizeFlat(s.accents, s.isBoss ? BOSS_TEETH_COLOR : CORE_ARMED_IN, 0.96);
+					colorizeFlat(s.accents, s.isBoss ? BOSS_ACCENT_COLOR : Ring.COLOR_AMBUSH, s.isBoss ? 0.82 : 0.72);
 			}
 		}
 
@@ -369,7 +359,7 @@ class Circles {
 			activeGlowBatch.visible = false;
 			return;
 		}
-		activePulseRad = anyInside ? PULSE_INSIDE_RAD : PULSE_SPAWN_RAD;
+		activePulseRad = anyInside ? PULSE_INSIDE_RAD : PULSE_ACTIVE_RAD;
 		var quad = new Quad(1, 1, 0xFFFFFF);
 		quad.setStyle(new MeshStyle(), false);
 		for (i in 0...count) {
@@ -382,15 +372,28 @@ class Circles {
 			var segs = Std.int(Math.max(16, Math.min(48, Math.round(z.radius * 0.32))));
 			if (!activeGlowBatch.canAddMesh(quad, segs * 8))
 				break;
-			var col = st == ZoneTracker.STATUS_SPAWNED_ALIVE ? GLOW_SPAWN_COLOR : GLOW_INSIDE_COLOR;
-			// Inner feathered halo (r -> r - 14) + outer feathered halo (r + 10 -> r)
-			setQuadSplit(quad, col, 0.50, col, 0.0);
-			emitStrip(activeGlowBatch, quad, z.x, z.y, Math.max(0.0, z.radius - 14.0), z.radius, segs);
-			setQuadSplit(quad, col, 0.0, col, 0.50);
-			emitStrip(activeGlowBatch, quad, z.x, z.y, z.radius, z.radius + 10.0, segs);
+			var col = st == ZoneTracker.STATUS_SPAWNED_ALIVE ? GLOW_ACTIVE_COLOR : GLOW_INSIDE_COLOR;
+			setQuadSplit(quad, col, 0.24, col, 0.0);
+			emitStrip(activeGlowBatch, quad, z.x, z.y, Math.max(0.0, z.radius - 10.0), z.radius, segs);
+			setQuadSplit(quad, col, 0.0, col, 0.24);
+			emitStrip(activeGlowBatch, quad, z.x, z.y, z.radius, z.radius + 7.0, segs);
 		}
 		quad.dispose();
 		activeGlowBatch.visible = activeGlowBatch.numVertices > 0;
+	}
+
+	static inline function armedInkAlpha(s:ZoneSlice):Float {
+		return s.isBoss ? INK_ALPHA_BOSS : (s.isUtility ? INK_ALPHA_UTIL : INK_ALPHA_ARMED);
+	}
+
+	static inline function armedCoreAlpha(s:ZoneSlice):Float {
+		if (s.isBoss)
+			return 0.80;
+		if (s.severity >= Ring.SEVERITY_AMBUSH)
+			return 0.74;
+		if (s.severity >= Ring.SEVERITY_TRAP)
+			return 0.72;
+		return 0.60;
 	}
 
 	static function colorizeFlat(range:VertexRange, rgb:UInt, alpha:Float):Void {
@@ -420,6 +423,8 @@ class Circles {
 	}
 
 	static inline function companionCount(zone:Ring.Zone, outerDashes:Int):Int {
+		if (zone.severity >= Ring.SEVERITY_BOSS)
+			return zone.radius < 48.0 ? 8 : Std.int(Math.max(8, outerDashes));
 		if (!zone.isAllHero)
 			return 0;
 		return zone.radius < 48.0 ? 4 : Std.int(Math.max(4, Math.floor(outerDashes * 0.5)));
@@ -492,7 +497,6 @@ class Circles {
 		}
 	}
 
-	/** Emits a continuous annular strip (inward wash or feathered active halo). */
 	static function emitStrip(batch:MeshBatch, quad:Quad, cx:Float, cy:Float, rIn:Float, rOut:Float, segs:Int):Void {
 		var step = 2 * Math.PI / segs;
 		var c0 = 1.0;
@@ -511,9 +515,9 @@ class Circles {
 		}
 	}
 
-	/** Emits staggered inner companion dots for `PROXIMITY_ALL_HERO` party-gather rings. */
-	static function emitCompanionDots(batch:MeshBatch, quad:Quad, z:Ring.Zone, outerDashes:Int, count:Int, thickness:Float, duty:Float):Void {
-		var r = Math.max(8.0, z.radius - (z.radius < 48.0 ? 6.0 : 8.0));
+	/** Emits inner companion ring dashes (Boss double-seal) or staggered dots (`PROXIMITY_ALL_HERO`). */
+	static function emitCompanionDots(batch:MeshBatch, quad:Quad, z:Ring.Zone, outerDashes:Int, count:Int, thickness:Float, duty:Float, inset:Float):Void {
+		var r = Math.max(8.0, z.radius - inset);
 		var slot = 2 * Math.PI / count;
 		var phase = Math.PI / outerDashes;
 		var halfSpan = slot * duty * 0.5;
@@ -530,7 +534,6 @@ class Circles {
 			var sm = Math.sin(mid);
 			var c2 = Math.cos(a2);
 			var s2 = Math.sin(a2);
-			// 2 quads per short dot
 			quad.setVertexPosition(0, z.x + rOut * c0, z.y + rOut * s0);
 			quad.setVertexPosition(1, z.x + rOut * cm, z.y + rOut * sm);
 			quad.setVertexPosition(2, z.x + rIn * c0, z.y + rIn * s0);
@@ -544,11 +547,11 @@ class Circles {
 		}
 	}
 
-	/** Emits inward-pointing triangular teeth (1 degenerate quad per tooth) around the perimeter. */
+	/** Emits subtle cardinal inward ticks (1 degenerate quad per tick). */
 	static function emitTeeth(batch:MeshBatch, quad:Quad, z:Ring.Zone, coreW:Float, count:Int, depth:Float, isCasing:Bool):Void {
 		var rBase = Math.max(4.0, z.radius - coreW * (isCasing ? 0.15 : 0.35));
 		var rApex = Math.max(2.0, z.radius - depth);
-		var halfBaseWorld = (isCasing ? 6.4 : 4.2);
+		var halfBaseWorld = isCasing ? 5.2 : 3.2;
 		var dAng = halfBaseWorld / rBase;
 		var step = 2 * Math.PI / count;
 		for (k in 0...count) {
@@ -578,9 +581,9 @@ class Circles {
 			var cleared = st == ZoneTracker.STATUS_TRIGGERED;
 			var spawned = st == ZoneTracker.STATUS_SPAWNED_ALIVE;
 
-			var inkA = cleared ? INK_ALPHA_CLEARED : INK_ALPHA_ARMED;
-			var coreCol = cleared ? CORE_CLEAR_OUT : (spawned ? CORE_SPAWN_IN : (p.isUtility ? CORE_UTIL_OUT : activeCoreColor));
-			var coreA = cleared ? 0.28 : (p.isUtility ? 0.82 : 0.95);
+			var inkA = cleared ? INK_ALPHA_CLEARED : (p.isUtility ? INK_ALPHA_UTIL : INK_ALPHA_ARMED);
+			var coreCol = cleared ? CORE_CLEARED : (spawned ? CORE_ACTIVE : Ring.tierColor(zone.severity));
+			var coreA = cleared ? 0.24 : (spawned ? 0.90 : (p.isUtility ? 0.60 : 0.72));
 
 			g.lineStyle(p.inkW, INK_COLOR, inkA);
 			drawOpenFLDashes(g, zone, dashes);

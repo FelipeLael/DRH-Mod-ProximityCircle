@@ -179,7 +179,7 @@ class TrapHud {
 
 	var onsetStartMs:Int = -1;
 
-	var activeCoreColor:UInt = Ring.COLOR_ROSE;
+	var activeCoreColor:UInt = Ring.COLOR_TRAP;
 
 	public function new(overlay:Sprite, facade:Null<DBFacade>) {
 		root = new Sprite();
@@ -900,8 +900,9 @@ class TrapHud {
 				bg.lineTo(CARD_WIDTH - PAD_X - 4, rowY + 1);
 			}
 
-			// Left 4px threat stripe
-			var stripeCol = cleared ? COL_BRONZE_DARK : (isBoss ? 0xFFCC00 : (item.isProp ? PropHighlight.GLOW_COLOR : activeCoreColor));
+			// Left 4px threat stripe (harmonized with restrained dungeon-mineral floor & prop signifiers)
+			var ringCol = Ring.tierColor(item.severity);
+			var stripeCol = cleared ? COL_BRONZE_DARK : (isBoss ? 0xD4A94A : (item.isProp ? PropHighlight.GLOW_COLOR : ringCol));
 			bg.lineStyle(0, 0, 0);
 			bg.beginFill(stripeCol, cleared ? 0.55 : 0.96);
 			bg.drawRoundRect(PAD_X + 1, rowY + 4, 4, ROW_H - 8, 2, 2);
@@ -921,7 +922,7 @@ class TrapHud {
 			if (item.isProp)
 				drawPropBadge(bdg, cx, cy, cleared, rowAlpha);
 			else
-				drawRingBadge(bdg, cx, cy, cleared ? COL_BRONZE_DARK : activeCoreColor, item.inDanger, spawned, cleared, rowAlpha);
+				drawRingBadge(bdg, cx, cy, cleared ? COL_BRONZE_DARK : ringCol, item.inDanger, spawned, cleared, rowAlpha);
 
 			// Right 74x20 semantic gradient state chip
 			drawStateChip(bg, 246, rowY + 8, 74, 20, item.chipKind, rowAlpha);
@@ -938,7 +939,7 @@ class TrapHud {
 			rv.chip.alpha = rowAlpha;
 
 			var outCol = if (cleared) 0xB59C7A; else if (isBoss) 0xFFCC00; else 0xFFF3D6;
-			var srcCol = if (cleared) 0x8D775C; else if (item.isProp) 0xFF9ED0; else 0xC8AE86;
+			var srcCol = if (cleared) 0x8D775C; else if (item.isProp) 0xE6A199; else 0xC8AE86;
 			var chipTextCol = switch (item.chipKind) {
 				case CHIP_CLEARED: 0x9E886B;
 				case CHIP_ARMED: 0xF2C14E;
@@ -1028,23 +1029,22 @@ class TrapHud {
 	static function drawPropBadge(g:Graphics, cx:Float, cy:Float, cleared:Bool, alphaScale:Float):Void {
 		var r = 7.5;
 		var rim = cleared ? COL_BRONZE_DARK : PropHighlight.GLOW_COLOR;
-		var fill = cleared ? 0x3A281A : 0x56163C;
-		g.lineStyle(2.0, rim, 0.95 * alphaScale);
-		g.beginFill(fill, 0.92 * alphaScale);
-		g.moveTo(cx, cy - r);
-		g.lineTo(cx + r, cy);
-		g.lineTo(cx, cy + r);
-		g.lineTo(cx - r, cy);
-		g.lineTo(cx, cy - r);
+		var fill = cleared ? 0x3A281A : 0x241612;
+		g.lineStyle(1.8, rim, 0.95 * alphaScale);
+		g.beginFill(fill, 0.94 * alphaScale);
+		g.drawCircle(cx, cy, r);
 		g.endFill();
 		if (cleared) {
 			drawTinyCheck(g, cx, cy, 0xB59C7A, alphaScale);
 		} else {
-			g.lineStyle(1.5, PropHighlight.SHIMMER_COLOR, 0.95 * alphaScale);
-			g.moveTo(cx, cy - 3.5);
-			g.lineTo(cx, cy + 3.5);
-			g.moveTo(cx - 3.5, cy);
-			g.lineTo(cx + 3.5, cy);
+			// Mini prohibition slash over warm bone-ivory consequence dot
+			g.lineStyle(0, 0, 0);
+			g.beginFill(PropHighlight.SHIMMER_COLOR, 0.95 * alphaScale);
+			g.drawCircle(cx, cy, 2.6);
+			g.endFill();
+			g.lineStyle(1.8, PropHighlight.GLOW_COLOR, 0.96 * alphaScale);
+			g.moveTo(cx - 4.8, cy - 4.8);
+			g.lineTo(cx + 4.8, cy + 4.8);
 		}
 	}
 
