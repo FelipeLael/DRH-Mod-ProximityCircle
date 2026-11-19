@@ -295,7 +295,7 @@ class Main extends Mod {
 
 		tracker.reset(zones);
 		var starlingOverlay:Null<StarlingLayer> = manager == null ? null : manager.starlingOverlayLayer;
-		highlights.setFloorTraps(propTraps, visible, starlingFloor, starlingOverlay);
+		highlights.setFloorTraps(propTraps, visible, starlingOverlay);
 		var actors = game.remoteActors;
 		if (actors != null) {
 			for (key in actors.keysToArray()) {

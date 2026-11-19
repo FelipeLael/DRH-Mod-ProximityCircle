@@ -19,12 +19,10 @@ typedef TrackedProp = {
 	var phaseMs:Int;
 	var initialHp:UInt;
 	var maxDim:Float;
-	var collarR:Float;
 	var badgeLift:Float;
 	var wasHitTriggered:Bool;
 	var lastGlint:Float;
 	var colorMat:Array<Dynamic>;
-	var collarBatch:Null<MeshBatch>;
 	var badgeBatch:Null<MeshBatch>;
 }
 
@@ -38,7 +36,7 @@ typedef BrokenProp = {
 /**
  * Marks destructible trap objects (barrels, cages, statues, eggs, huts) using negative-affordance
  * signifiers grounded in ecological & hazard-warning psychology (Gibson 1979, Norman 2013,
- * Wogalter C-HIP, ANSI Z535.3, Glover & Wogalter 1998, Mayer Spatial Contiguity, Palmer 1992):
+ * Wogalter C-HIP, ANSI Z535.3, Glover & Wogalter 1998, Mayer Spatial Contiguity):
  *
  * 1. **Overhead Prohibition + Consequence Badge (`starlingOverlayLayer`, layer 36):** Anchored
  *    directly above the prop so gaze never leaves combat. Shows *why* not to break it (bone-ivory
@@ -46,11 +44,12 @@ typedef BrokenProp = {
  *    charcoal medallion (`#161210`) framed by an ANSI Z535.3 `#C9544D` prohibition ring & 45-deg
  *    slash with a dark knock-out border so the skull remains legible. Quiet (`0.65` alpha) when
  *    distant; ramps to `0.96` with a brief low-amplitude cage-rattle shudder within swing range.
- * 2. **Base Containment Collar (floor layer 12):** Tightly hugs the prop footprint with inward
- *    charcoal/crimson iron chevrons—visually sealing the prop instead of glowing like loot.
- * 3. **Restrained Sprite Rim & Specular Gleam (`npc.actorView.bodyAnimRenderer`):** Muted crimson
+ * 2. **Restrained Sprite Rim & Specular Gleam (`npc.actorView.bodyAnimRenderer`):** Muted crimson
  *    (`#B84A44`) or Boss plum-burgundy (`#A34E68`) rim glow + subtle anisotropic GPU color-filter
  *    gleam (camera-culled off-screen; retired cleanly once a `"HIT"` prop has fired).
+ *
+ * Keeps floor rings exclusively for step-triggered proximity zones so floor vs object affordances
+ * never collide visually.
  */
 class PropHighlight {
 	/** Muted crimson-terracotta warning color (used for prop rim, badges, and HUD accent). */
@@ -63,13 +62,7 @@ class PropHighlight {
 
 	static inline final RIM_BOSS_COLOR:UInt = 0xA34E68;
 
-	static inline final COLLAR_ENEMY_COLOR:UInt = 0xA64B4B;
-
-	static inline final COLLAR_BOSS_COLOR:UInt = 0xA34E68;
-
 	static inline final BOSS_CROWN_COLOR:UInt = 0xD4A94A;
-
-	static inline final INK_COLOR:UInt = 0x14110F;
 
 	static inline final BADGE_BG_COLOR:UInt = 0x161210;
 
@@ -132,8 +125,6 @@ class PropHighlight {
 
 	var broken:Array<BrokenProp> = [];
 
-	var floorLayer:Null<StarlingLayer> = null;
-
 	var overlayLayer:Null<StarlingLayer> = null;
 
 	var isVisible:Bool = true;
@@ -152,11 +143,10 @@ class PropHighlight {
 		return broken;
 	}
 
-	/** Replaces the floor's expected prop traps and Starling world layers (floor 12 + overlay 36). */
-	public function setFloorTraps(traps:Array<Ring.PropTrap>, visible:Bool, floor:Null<StarlingLayer> = null, overlay:Null<StarlingLayer> = null):Void {
+	/** Replaces the floor's expected prop traps and Starling overlay layer (layer 36). */
+	public function setFloorTraps(traps:Array<Ring.PropTrap>, visible:Bool, overlay:Null<StarlingLayer> = null):Void {
 		clear();
 		isVisible = visible;
-		floorLayer = floor;
 		overlayLayer = overlay;
 		trapsByConstant = new Map();
 		for (trap in traps) {
@@ -208,12 +198,10 @@ class PropHighlight {
 			phaseMs: rawPhase,
 			initialHp: npc.hitPoints,
 			maxDim: dims.maxDim,
-			collarR: dims.collarR,
 			badgeLift: dims.badgeLift,
 			wasHitTriggered: false,
 			lastGlint: -1.0,
 			colorMat: newMatrix(),
-			collarBatch: null,
 			badgeBatch: null
 		};
 		buildWorldSignifiers(entry);
@@ -312,8 +300,6 @@ class PropHighlight {
 						applyGlow(entry, r);
 						r.clearColorFilter();
 					}
-					if (entry.collarBatch != null)
-						entry.collarBatch.alpha = 0.25;
 					if (entry.badgeBatch != null) {
 						entry.badgeBatch.alpha = 0.28;
 						entry.badgeBatch.x = entry.npc.positionX;
@@ -369,7 +355,6 @@ class PropHighlight {
 		trackedIds = new Map();
 		trapsByConstant = new Map();
 		broken = [];
-		floorLayer = null;
 		overlayLayer = null;
 	}
 
@@ -397,10 +382,6 @@ class PropHighlight {
 
 	function cleanupEntry(entry:TrackedProp):Void {
 		clearRenderer(entry.renderer);
-		if (entry.collarBatch != null) {
-			entry.collarBatch.removeFromParent(true);
-			entry.collarBatch = null;
-		}
 		if (entry.badgeBatch != null) {
 			entry.badgeBatch.removeFromParent(true);
 			entry.badgeBatch = null;
@@ -408,8 +389,6 @@ class PropHighlight {
 	}
 
 	function setSignifiersVisible(entry:TrackedProp, on:Bool):Void {
-		if (entry.collarBatch != null)
-			entry.collarBatch.visible = on;
 		if (entry.badgeBatch != null)
 			entry.badgeBatch.visible = on;
 	}
@@ -422,72 +401,20 @@ class PropHighlight {
 			entry.badgeBatch.y = entry.npc.positionY - entry.badgeLift;
 	}
 
-	/** Builds the world-space base containment collar (layer 12) + overhead skull/prohibition badge (layer 36). */
+	/** Builds the world-space overhead skull/prohibition badge on layer 36. */
 	function buildWorldSignifiers(entry:TrackedProp):Void {
+		if (overlayLayer == null)
+			return;
 		var px = entry.npc.hasPosition ? entry.npc.positionX : entry.trap.x;
 		var py = entry.npc.hasPosition ? entry.npc.positionY : entry.trap.y;
 		var isBoss = entry.trap.severity >= Ring.SEVERITY_BOSS;
-
-		if (floorLayer != null) {
-			var collar = buildCollarBatch(entry.collarR, isBoss);
-			collar.x = px;
-			collar.y = py;
-			collar.visible = isVisible;
-			floorLayer.addChild(collar);
-			entry.collarBatch = collar;
-		}
-
-		if (overlayLayer != null) {
-			var badge = buildOverheadBadgeBatch(isBoss, entry.trap.hasGenerator);
-			badge.x = px;
-			badge.y = py - entry.badgeLift;
-			badge.alpha = 0.65;
-			badge.visible = isVisible;
-			overlayLayer.addChild(badge);
-			entry.badgeBatch = badge;
-		}
-	}
-
-	/** Base containment collar (Palmer Common Region): 8 inward charcoal/crimson iron chevrons hugging footprint. */
-	static function buildCollarBatch(r:Float, isBoss:Bool):MeshBatch {
-		var batch = new MeshBatch();
-		batch.touchable = false;
-		batch.setStyle(new MeshStyle(), false);
-		var quad = new Quad(1, 1, 0xFFFFFF);
-		quad.setStyle(new MeshStyle(), false);
-
-		var coreCol = isBoss ? COLLAR_BOSS_COLOR : COLLAR_ENEMY_COLOR;
-		var coreAlpha = isBoss ? 0.72 : 0.64;
-		var segs = 16;
-
-		// Charcoal under-ring + restrained mineral collar
-		emitRingSegs(batch, quad, r, 3.8, INK_COLOR, 0.48, segs, 0.56);
-		emitRingSegs(batch, quad, r, 1.7, coreCol, coreAlpha, segs, 0.52);
-
-		// 8 short inward iron chevrons visually "sealing" the prop
-		var chevCount = 8;
-		var step = 2 * Math.PI / chevCount;
-		for (pass in 0...2) {
-			var col = pass == 0 ? INK_COLOR : (isBoss ? BOSS_CROWN_COLOR : coreCol);
-			var alp = pass == 0 ? 0.52 : (isBoss ? 0.80 : 0.70);
-			var depth = pass == 0 ? 9.5 : 7.2;
-			var halfB = pass == 0 ? 5.2 : 3.2;
-			setQuadFlat(quad, col, alp);
-			for (k in 0...chevCount) {
-				var a = k * step + Math.PI * 0.125;
-				var dAng = halfB / r;
-				var ax = (r - depth) * Math.cos(a);
-				var ay = (r - depth) * Math.sin(a);
-				quad.setVertexPosition(0, r * Math.cos(a - dAng), r * Math.sin(a - dAng));
-				quad.setVertexPosition(1, r * Math.cos(a + dAng), r * Math.sin(a + dAng));
-				quad.setVertexPosition(2, ax, ay);
-				quad.setVertexPosition(3, ax, ay);
-				batch.addMesh(quad, null, 1.0, null, true);
-			}
-		}
-
-		quad.dispose();
-		return batch;
+		var badge = buildOverheadBadgeBatch(isBoss, entry.trap.hasGenerator);
+		badge.x = px;
+		badge.y = py - entry.badgeLift;
+		badge.alpha = 0.65;
+		badge.visible = isVisible;
+		overlayLayer.addChild(badge);
+		entry.badgeBatch = badge;
 	}
 
 	/**
@@ -644,12 +571,8 @@ class PropHighlight {
 				r.applyColorFilter(entry.colorMat);
 			}
 		}
-		if (entry.wasHitTriggered) {
-			if (entry.collarBatch != null)
-				entry.collarBatch.alpha = 0.25;
-			if (entry.badgeBatch != null)
-				entry.badgeBatch.alpha = 0.28;
-		}
+		if (entry.wasHitTriggered && entry.badgeBatch != null)
+			entry.badgeBatch.alpha = 0.28;
 	}
 
 	static function applyGlow(entry:TrackedProp, r:ActorRenderer):Void {
@@ -722,9 +645,8 @@ class PropHighlight {
 		}
 	}
 
-	static function measureProp(npc:NPCGameObject):{maxDim:Float, collarR:Float, badgeLift:Float} {
+	static function measureProp(npc:NPCGameObject):{maxDim:Float, badgeLift:Float} {
 		var maxDim = 220.0;
-		var collarR = 46.0;
 		var badgeLift = 86.0;
 
 		var ad:Dynamic = npc.actorData;
@@ -738,13 +660,12 @@ class PropHighlight {
 			var rect = view.mouseHitRect;
 			if (rect != null && rect.width > 0 && rect.height > 0) {
 				maxDim = Math.max(rect.width, rect.height);
-				collarR = Math.max(30.0, Math.min(88.0, rect.width * 0.42 + 6.0));
 				var rectTop = -rect.y;
 				if (rectTop > 30.0 && rectTop + 14.0 > badgeLift)
 					badgeLift = Math.min(220.0, rectTop + 14.0);
 			}
 		}
-		return {maxDim: maxDim, collarR: collarR, badgeLift: badgeLift};
+		return {maxDim: maxDim, badgeLift: badgeLift};
 	}
 
 	public static inline function isAliveProp(npc:Null<NPCGameObject>):Bool {
